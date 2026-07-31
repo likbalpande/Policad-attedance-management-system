@@ -131,7 +131,7 @@ LAG will validate if the scanned timestamp (highest one) is at max 9 seconds old
 It will also check if the highest - smallest timestamp <= 14 seconds.
 *** It will then check the course_session_id is valid or not, and get the other details if required.
 The request will be given to SQS --> LALW with 
-    hashes (with scanned timestamps), remark: "QR Based Attendance", status: "present"
+    hashes (with scanned timestamps), remark: "qr based attendance", status: "present"
     course_id, course_session_id, user_id, ip_address, device_config,
     secret (org specific), org's webhook url and alias data.
 Note: alias data is basically the data which admin has aliased for user_id, course_id, course_session_id.
@@ -162,7 +162,7 @@ In LALW,
 
 FTA / FTF can mark the student as present / absent manually.
 The request will be given to SQS --> LALW with 
-    hashes (with scanned timestamps), remark: "Admin triggered", status: "absent", remarked_by_user_id,
+    hashes (with scanned timestamps), remark: "admin triggered", status: "absent", remarked_by_user_id,
     course_id, course_session_id, user_id,
     secret (org specific), org's webhook url and alias data.
 
