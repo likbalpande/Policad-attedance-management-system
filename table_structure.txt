@@ -1,0 +1,327 @@
+access_identifiers
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    identifier VARCHAR(50) NOT NULL,
+    description VARCHAR(50) NOT NULL,
+    type VARCHAR(25) NOT NULL, // application_level_enum(general, batch, course, org)
+
+    CONSTRAINT uq__access_identifiers__identifier__type 
+        UNIQUE (identifier, type)
+    // NOT REQUIRED - Compound index works LEFT-TO-RIGHT - CREATE INDEX idx__access_identifiers__identifier ON access_identifiers (identifier);
+
+admin_permissions_config_groups
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(50) NOT NULL,
+    description TEXT NOT NULL,
+    type VARCHAR(25) NOT NULL, // application_level_enum(general, batch, course, org)
+
+    CONSTRAINT uq__admin_permissions_config_groups__title__type 
+        UNIQUE (title, type)
+
+admin_permitted_access_identifiers
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    permission_config_group_id INT NOT NULL, 
+    access_identifier_id INT NOT NULL,
+
+    CONSTRAINT fk_admin_permitted_access_identifiers__permission_config_id 
+        FOREIGN KEY (permission_config_group_id) REFERENCES admin_permissions_config_groups(id),
+    CONSTRAINT fk_admin_permitted_access_identifiers__access_identifier_id 
+        FOREIGN KEY (access_identifier_id) REFERENCES access_identifiers(id),
+
+    CONSTRAINT uq__admin_permitted_access_identifiers__permission_config_group_id__access_identifier_id 
+        UNIQUE (permission_config_group_id, access_identifier_id)
+
+organizations
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    logo_url TEXT,
+    webhook_url TEXT,
+    live_attendance_trigger DEFAULT FALSE NOT NULL
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+
+    CONSTRAINT uq__organizations__name 
+        UNIQUE (name)
+
+users
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    identifier VARCHAR(255) NOT NULL,
+    org_id INT NOT NULL,
+    email VARCHAR(255),
+    phone VARCHAR(20),
+    whatsapp VARCHAR(20),
+    role VARCHAR(25) NOT NULL, // application_level_enum(super_admin, admin, faculty, student)
+    password VARCHAR(50),
+    password_generated_at TIMESTAMPTZ NOT NULL,
+    allow_password_login DEFAULT FALSE NOT NULL,
+    alisa TEXT,
+    created_by_user_id INT,
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+
+    CONSTRAINT fk__users__org_id
+        FOREIGN KEY (org_id) REFERENCES organizations(id),
+    CONSTRAINT fk__users__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id),
+
+    CONSTRAINT uq__users__identifier__org_id
+        UNIQUE (identifier, org_id),
+    CONSTRAINT uq__users__email
+        UNIQUE (email),
+    CONSTRAINT uq__users__phone
+        UNIQUE (phone),
+    CONSTRAINT uq__users__whatsapp
+        UNIQUE (whatsapp),
+    
+    CREATE INDEX idx__users__password_generated_at ON users(password_generated_at)
+    CREATE INDEX idx__users__created_by_user_id ON users(created_by_user_id)
+
+user_permissions
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    admin_permissions_config_group_id INT NOT NULL,
+    resource_id INT, // batch_id / course_id / org_id / null
+    assigned_by_user_id INT NOT NULL,
+
+    CONSTRAINT fk__user_permissions__user_id
+        FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk__user_permissions__admin_permissions_config_group_id
+        FOREIGN KEY (admin_permissions_config_group_id) REFERENCES admin_permissions_config_groups(id),
+    CONSTRAINT fk__user_permissions__assigned_by_user_id
+        FOREIGN KEY (assigned_by_user_id) REFERENCES users(id)
+
+    CONSTRAINT uq__user_permissions__user_id__admin_permissions_config_group_id__resource_id
+        UNIQUE NULLS NOT DISTINCT (user_id, admin_permissions_config_group_id, resource_id),
+    
+    // NOT REQUIRED - Compound index works LEFT-TO-RIGHT - CREATE INDEX idx__user_permissions__user_id ON user_permissions(user_id)
+
+batches
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(50) NOT NULL,
+    alias TEXT,
+    org_id INT NOT NULL,
+    created_by_user_id INT NOT NULL,
+    is_archived BOOLEAN DEFAULT FALSE NOT NULL,
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+
+    CONSTRAINT fk__batches__org_id
+        FOREIGN KEY (org_id) REFERENCES organizations(id),
+    CONSTRAINT fk__batches__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id),
+    
+    CONSTRAINT uq__batches__title__org_id
+        UNIQUE NULLS NOT DISTINCT (title, org_id),
+    CONSTRAINT uq__batches__alias__org_id
+        UNIQUE NULLS NOT DISTINCT (org_id, alias),
+    
+    // NOT REQUIRED - Compound index works LEFT-TO-RIGHT - CREATE INDEX idx__batches__org_id ON batches(org_id)
+
+batch_students
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    batch_id INT NOT NULL,
+    user_id INT NOT NULL,
+    assigned_by_user_id INT NOT NULL,
+
+    CONSTRAINT fk__batch_students__batch_id
+        FOREIGN KEY (batch_id) REFERENCES batches(id),
+    CONSTRAINT fk__batch_students__user_id
+        FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk__batch_students__assigned_by_user_id
+        FOREIGN KEY (assigned_by_user_id) REFERENCES users(id),
+
+    CONSTRAINT uq__batch_students__batch_id__user_id
+        UNIQUE NULLS NOT DISTINCT (batch_id, user_id),
+    
+    CREATE INDEX idx__batch_students__user_id ON batch_students(user_id)
+
+courses
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(50) NOT NULL,
+    alias TEXT,
+    org_id INT NOT NULL,
+    created_by_user_id INT NOT NULL,
+    type VARCHAR(25) NOT NULL, // application_level_enum(regular, event)
+    is_archived BOOLEAN DEFAULT FALSE NOT NULL,
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+
+    CONSTRAINT fk__courses__org_id
+        FOREIGN KEY (org_id) REFERENCES organizations(id),
+    CONSTRAINT fk__courses__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id),
+    
+    CONSTRAINT uq__courses__title__org_id
+        UNIQUE NULLS NOT DISTINCT (title, org_id),
+    CONSTRAINT uq__courses__alias__org_id
+        UNIQUE NULLS NOT DISTINCT (org_id, alias)
+
+course_batch
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    course_id INT NOT NULL,
+    user_id INT NOT NULL,
+    assigned_by_user_id INT NOT NULL,
+
+    CONSTRAINT fk__course_batch__course_id
+        FOREIGN KEY (course_id) REFERENCES courses(id),
+    CONSTRAINT fk__course_batch__user_id
+        FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk__course_batch__assigned_by_user_id
+        FOREIGN KEY (assigned_by_user_id) REFERENCES users(id),
+
+    CONSTRAINT uq__course_batch__course_id__user_id
+        UNIQUE NULLS NOT DISTINCT (course_id, user_id),
+    
+    CREATE INDEX idx__course_batch__user_id ON course_batch(user_id)
+
+course_sessions
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(50) NOT NULL,
+    alias TEXT,
+    course_id INT NOT NULL,
+    created_by_user_id INT NOT NULL,
+    is_archived BOOLEAN DEFAULT FALSE NOT NULL,
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+
+    CONSTRAINT fk__course_sessions__course_id
+        FOREIGN KEY (course_id) REFERENCES courses(id),
+    CONSTRAINT fk__course_sessions__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id),
+
+    CONSTRAINT uq__course_sessions__title__course_id
+        UNIQUE NULLS NOT DISTINCT (title, course_id),
+    CONSTRAINT uq__course_sessions__course_id__alias
+        UNIQUE NULLS NOT DISTINCT (course_id, alias)
+
+course_tags
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(50) NOT NULL,
+    created_by_user_id INT NOT NULL,
+
+    CONSTRAINT fk__course_tags__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+
+course_tag_map
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    course_id INT NOT NULL,
+    course_tag_id INT NOT NULL,
+    created_by_user_id INT NOT NULL,
+
+    CONSTRAINT fk__course_tag_map__course_id
+        FOREIGN KEY (course_id) REFERENCES courses(id),
+    CONSTRAINT fk__course_tag_map__course_tag_id
+        FOREIGN KEY (course_tag_id) REFERENCES course_tags(id),
+    CONSTRAINT fk__course_tag_map__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id),
+
+    CONSTRAINT uq__course_tag_map__course_id__course_tag_id
+        UNIQUE NULLS NOT DISTINCT (course_id, course_tag_id),
+    
+    CREATE INDEX idx__course_tag_map__course_tag_id ON course_tag_map(course_tag_id)
+
+batch_tag
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(50) NOT NULL,
+    created_by_user_id INT NOT NULL,
+
+    CONSTRAINT fk__batch_tag__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+
+batch_tag_map
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    batch_id INT NOT NULL,
+    batch_tag_id INT NOT NULL,
+    created_by_user_id INT NOT NULL,
+
+    CONSTRAINT fk__batch_tag_map__batch_id
+        FOREIGN KEY (batch_id) REFERENCES batches(id),
+    CONSTRAINT fk__batch_tag_map__batch_tag_id
+        FOREIGN KEY (batch_tag_id) REFERENCES batch_tags(id),
+    CONSTRAINT fk__batch_tag_map__created_by_user_id
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id),
+
+    CONSTRAINT uq__batch_tag_map__batch_id__batch_tag_id
+        UNIQUE NULLS NOT DISTINCT (batch_id, batch_tag_id),
+    
+    CREATE INDEX idx__batch_tag_map__batch_tag_id ON batch_tag_map(batch_tag_id)
+
+attendance_session_invocations
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    course_session_id INT NOT NULL,
+    invoked_by_user_id INT NOT NULL,
+    invocation_start_timestamp TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT fk__attendance_session_invocations__course_session_id
+        FOREIGN KEY (course_session_id) REFERENCES course_sessions(id),
+    CONSTRAINT fk__attendance_session_invocations__invoked_by_user_id
+        FOREIGN KEY (invoked_by_user_id) REFERENCES users(id),
+
+    CREATE INDEX idx__attendance_session_invocations__course_session_id ON attendance_session_invocations(course_session_id)
+
+attendances
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    course_session_id INT NOT NULL,
+    status VARCHAR(50) NOT NULL, // application_level_enum(present, absent)
+    remark VARCHAR(50) NOT NULL, // application_level_enum('qr based attendance', admin triggered)
+    device_config jsonb NOT NULL,
+    ip_address VARCHAR(50) NOT NULL,
+    location_info jsonb,
+    location_lat DOUBLE PRECISION,
+    location_long DOUBLE PRECISION,
+    location_point geography(Point, 4326),
+    scanned_at TIMESTAMPTZ NOT NULL,
+    remarked_by_user_id INT, // NULLABLE for system marked
+
+    CONSTRAINT fk__attendances__user_id
+        FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk__attendances__course_session_id
+        FOREIGN KEY (course_session_id) REFERENCES course_sessions(id),
+    CONSTRAINT fk__attendances__remarked_by_user_id
+        FOREIGN KEY (remarked_by_user_id) REFERENCES users(id),
+
+    CONSTRAINT uq__attendances__user_id__course_session_id
+        UNIQUE NULLS NOT DISTINCT (user_id, course_session_id),
+
+
+    CREATE INDEX idx__attendances__course_session_id ON attendances(course_session_id)
+
+attendance_history
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    course_session_id INT NOT NULL,
+    status VARCHAR(50) NOT NULL, // application_level_enum(present, absent)
+    remark VARCHAR(50) NOT NULL, // application_level_enum('qr based attendance', admin triggered)
+    device_config jsonb NOT NULL,
+    ip_address VARCHAR(50) NOT NULL,
+    location_info jsonb,
+    location_lat DOUBLE PRECISION,
+    location_long DOUBLE PRECISION,
+    location_point geography(Point, 4326),
+    scanned_at TIMESTAMPTZ NOT NULL,
+    remarked_by_user_id INT, // NULLABLE for system marked
+
+    CONSTRAINT fk__attendance_history__user_id
+        FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk__attendance_history__course_session_id
+        FOREIGN KEY (course_session_id) REFERENCES course_sessions(id),
+    CONSTRAINT fk__attendance_history__remarked_by_user_id
+        FOREIGN KEY (remarked_by_user_id) REFERENCES users(id),
+
+    CREATE INDEX idx__attendance_history__course_session_id ON attendance_history(course_session_id),
+    CREATE INDEX idx__attendance_history__user_id ON attendance_history(user_id)
+
+webhook_history
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    attendance_history_id INT NOT NULL,
+    status VARCHAR(50) NOT NULL, // application_level_enum(pending, completed)
+    processed_at TIMESTAMPTZ,
+    last_attempted_at TIMESTAMPTZ,
+    processing_started_at TIMESTAMPTZ,
+    is_processing BOOLEAN DEFAULT FALSE NOT NULL,
+    retries INT DEFAULT 0,
+    webhook_url TEXT NOT NULL,
+
+    CONSTRAINT fk__webhook_history__attendance_history_id
+        FOREIGN KEY (attendance_history_id) REFERENCES attendance_history(id),
+
+    CREATE INDEX idx__webhook_history__status ON webhook_history(status) WHERE status != 'completed',
+    CREATE INDEX idx__webhook_history__updated_at ON webhook_history(updated_at) WHERE status != 'completed',
+    CREATE INDEX idx__webhook_history__processing_started_at ON webhook_history using BRIN (processing_started_at) WHERE status != 'completed',
+    CREATE INDEX idx__webhook_history__retries ON webhook_history(retries) WHERE status != 'completed'
+
