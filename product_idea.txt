@@ -1,8 +1,7 @@
 Platform Backend - PB
 Live Attendance Gateway - LAG
-Live Attendance Lambda Service - LALS
-Attendance Webhook Lambda Service - AWLS
-Attendance Compilation Lambda Service - ACLS
+AWS SQS - SQS
+Live Attendance Lambda Worker - LALW
 
 Frontend - FT
 Frontend part specific for students - FTS
@@ -56,7 +55,7 @@ FTS can see attendance status corresponding to course sessions / event.
 FTS can mark attendance (QR based).
 
 The main backend PB.
-The real-time attendance marking part is only handled by LAG / LALS.
+The real-time attendance marking part is only handled by LAG / LALW.
 
 The PB has RBAC. Every API checks for the permission. 
 For each API, a unique permission identifier is kept in a constants file.
@@ -69,22 +68,25 @@ The login api will remain same for super-admin / admin / faculty.
 It will be OTP based login.
 The access token only lives for 15 minutes. Then, it is renewed on expiry but within 7 days.
 The only condition to renew is that login_count in DB should match the login_count in payload.
-The access token (JWT) will be done using asymmetric hashing. 
-The access token hash the data with private key.
+The access token (JWT) will be done using asymmetric hashing.
+The access token hash the data with private key 1.
 The data (payload) will have a "origin" key which has value as hash (it will be created using UAI).
-The public key will be shared to other micro-services via API request by validating the service communication secret.
+This hash will again be a asymmetric hash. It will be done using private key 2.
+The public key 1 & 2 will be shared to other micro-services via API request by validating the service-communication-secret.
 
 The login of student will happen through one time password generated while user creation (version: 1).
 As soon as the password is used, the random hard password will be created and placed in its place.
 
 Admin / Faculty with P_O can create a new password for the student.
 When ever the new password is generated, 
-    <user_id>,<old_password_version> is saved in the banned_access table.
-    Every server downloads this list and saves it in memory. 
-    Server refetch it every two minutes (for created at < 2 days).
+    password_generated_at field is updated in users table.
     The password_version is updated +1.
+    Every server downloads the list  of users with password_generated_at < 2 days and saves it in memory (say users_on_alert_map). 
+    Server refetch it every 5 minutes.
 
 The access token creation for student will hash the data against private key.
+For access token validation in api call, it will check from users_on_alert_map that user id exists or not.
+If it exists then password version in payload should match that in the map.    
 The data (payload) will have a "origin" key which has value as hash (it will be created using UAI).
 The access token only lives for 1 day. Then, it is renewed on expiry but within 30 days.
 The only condition to renew is that password_version in DB should match the password_version in payload.
@@ -92,86 +94,80 @@ The only condition to renew is that password_version in DB should match the pass
 For the session, the admin / faculty will start the attendance session using FTF/FTA.
 It can only start the session if there is no ongoing entry in "attendance_session_records" (< 2 minutes from now).
 FTF/FTA will send the request to PB. PB will authenticate it, validate the course_id, access_level and then generate 120 tokens.
-i-th token is a hash of timestamp (in seconds) (i second ahead of now) + course_id + session_id + secret.
+i-th token is a hash of timestamp (in seconds) (i second ahead of now) + course_session_id + secret.
 The secret will be generated at 12am everyday for each organization and then stored in the DB.
 Whenever server starts, it will pull that secret from the DB for each organization.
 Whenever a session is requested, the attendance_session_records will be inserted with course_id, session_id, user_id, session_start_timestamp, created_at.
-Response from the server will ~ look like { "course_id":"...", "session_id", "...", hashes: { "ith-timestamp":"hash", ...} }
-
-It will create three new entries in the ACLS_task_queue table which actually acts like a queue.
-The entry will have the scheduled_at timestamp as +50 seconds, +100 seconds, +150 seconds.
-It will also have course_id, session_id, has_processed: false, is_processing: false, processing_started_at: null, created_at, retires: 0.
-If course_id, session_id pair already exists and the has_processed is false, then 
-    If the count of already present entries = 3
-        the latest present entry will be updated to set scheduled_at timestamp as +0 seconds from now.
-        remaining two entries will be updated for +50 & +100 seconds.
-        a new entry will be created for +150 seconds.
-    If the count of already present entries = 2 then 
-        the latest present entry will be updated to set scheduled_at timestamp as +0 seconds from now.
-        already existing other entry will be updated to +50 seconds from now 
-        and remaining entries will be created.
-    If the count of already present entries = 1 then 
-        the present entry will be updated to set scheduled_at timestamp as +0 seconds from now.
-        and remaining entries will be created.
+Response from the server will ~ look like { "course_session_id", "...", hashes: { "ith-timestamp":"hash", ...} }
 
 For is_ongoing_attendance_session API, it will check if there is a entry in attendance_session_records which has session_start_timestamp < 110 seconds from now.
 If yes, then it will create 120 tokens as per that session_start_timestamp, else send empty response.
 i-th token is a hash of timestamp (in seconds) (i second ahead of session_start_timestamp) + course_id + session_id + secret.
-Response from the server will ~ look like { "course_id":"...", "session_id", "...", hashes: { "ith-timestamp":"hash", ...} }
+Response from the server will ~ look like { "course_session_id", "...", hashes: { "ith-timestamp":"hash", ...} }
 
-The PB will have a cron which runs every 10 seconds to check if anything is pending and invokes ACLS for that.
-PB can put the new entry in table scheduled_at timestamp +0 second, by the faculty's or admin's manual trigger.
-(Note: the FTA/FTF request should be at_least 1 minute greater than the last scheduled job or error will be returned "too early : wait for 1 minute.")
-If there exists an unprocessed entry, then it will update the closest one by timestamp.
+For attendance_marked_webhook API, it will see all the connected admins / faculties for the given course_session_id and then send SSE to them. 
+It will also store the `${course_session_id}_${user_id}` and status in recent_attendance_cache for quick access.
 
-ACLS will take the course_id, session_id and the get all the from dynamoDB corresponding to it.
-It will get the final status of student present / absent.
-It will get all the students of the course / event and then remaining from the dynamoDB data will be marked absent.
-This snapshot of data will be stored in the attendance table in postgreSQL.
-Then it will call the AWLS with (with course_id, session_id).
-Attendance table would have user_id, course_id, session_id, status, remark, ip_address, device_info (json), marked_at, created_at. 
+For get_attendance_status API, the user will only send the user_id and course_session_id, 
+    if it is present in recent_attendance_cache, then that status will be returned
+    otherwise it will fetch all values for that course_session_id, store them in cache and then return the status for user_id.
+    The status can be 'present', 'absent' or null.
+    The TTL for keys in cache will be 10 seconds.
 
 The FTF/FTA will render the QR corresponding to each hash for each timestamp.
-The FTS will scan the QR and simultaneously store the scanned timestamp, session_id, course_id, hash value will be stored in FTS memory.
-Once the number of hashes = 5, the list will be sent to LAG along with scanned timestamps, session_id, course_id. 
+The FTS will scan the QR and simultaneously store the scanned hash value, timestamp, course_session_id will be stored in FTS memory.
+Once the number of hashes = 10, the list will be sent to LAG along with scanned timestamps, course_session_id. 
+
+It will wait for the response from LAG and 
+    then poll PB "get_attendance_status" at 5s, 15s, 30s, 60s, 75s, 90s, 105s, 120s - for status.
+    It will keep polling until it gets status == 'present'.
 
 LAG will generate a timestamp on server corresponding to the request.
-LAG will validate the user access (JWT) using the public key. 
-It will get the public key from PB via API call by sending secret of communication.
-That public key will be cached for 5 minutes.
-LAG will validate if the scanned timestamp (highest one) is at max 5 seconds old than the server's timestamp.
-It will also check if the highest - smallest timestamp <= 7 seconds.
-*** It will then check the course_id is valid or not, and get the other details if required.
-The request will be given to LALS with 
-    hashes (with scanned timestamps), 
-    course_id, user_id, session_id, ip_address
+It will get the public key 1 & 2 from PB via API call by sending secret of communication.
+That public keys will be cached for 5 minutes.
+LAG will validate the user access (JWT) & UAI using public key 1 & 2. 
+LAG will validate count(scanned hashes) == 10.
+LAG will validate if the scanned timestamp (highest one) is at max 9 seconds old than the server's timestamp.
+It will also check if the highest - smallest timestamp <= 14 seconds.
+*** It will then check the course_session_id is valid or not, and get the other details if required.
+The request will be given to SQS --> LALW with 
+    hashes (with scanned timestamps), remark: "QR Based Attendance", status: "present"
+    course_id, course_session_id, user_id, ip_address, device_config,
     secret (org specific), org's webhook url and alias data.
-Note: alias data is basically the data which admin has aliased for user_id, course_id, session_id.
-The alias mapping will be stored in a separate table in pg specific to org.
+Note: alias data is basically the data which admin has aliased for user_id, course_id, course_session_id.
+The alias mapping will also be stored in a pg.
 
-LALS will verify each hash for correctness by recreating the hash with scanned timestamp + course_id + session_id + secret.
-If all the hashes are correct then it will check if the `{course_id}_{session_id}_{user_id}` pair already exists in dynamoDB 
-and if not, then it will create a new entry as array with an object containing ```remark: "QR Based Attendance", status: "present", scanned_timestamp: "...", ip_address, created_at: "..."```
-Then it will call the PB webhook without await (with course_id, session_id, user_id, remark: "QR Based Attendance", status: "present", scanned_timestamp: "...", ip_address, created_at: "...").
-Then it will return the success response to LAG.
-The LAG will then send success response to the frontend.
-
-AWLS accept the request and send response of accepted.
-It will get all student for the course_session from pg "attendance" table.
-Then it will await the webhook url array of (with course_id, session_id, status, user_id, remark, scanned_timestamp, created_at and aliases) for all students.
-If it receives 2XX status code then it will put it in processed webhooks table `{course_id}_{session_id}_{user_id}` with all payload.
-If it receives any other status code then it will put it in failed webhooks table `{course_id}_{session_id}_{user_id}` with all payload.
-(Note: If record already exists then replace.)
-
-PB webhook will be exposed with a service communication secret, where the given information will be processed,
-to send SSE to all connected Admins / Faculties of that course_id.
+In LALW,
+    If status == "present" then 
+        LALW will verify each hash for correctness by recreating the hash with scanned timestamp + course_session_id + secret.
+        If the hashes are correct then it will put an entry in db, in attendance_history 
+            - (user_id, course_session_id, remark, status, device_config, ip_address, scanned_at)
+            returning attendance_history_id.
+        If the session_id, user_id pair exists in attendance table then it will replace else create - with same data.
+            returning attendance_id.
+        If the org has kept live_attendance_trigger true, then it will call the webhook url with the alias data.
+            If it receives 2XX status code then it will considered as processed else failed.
+            The data will be stored in webhook_history table. 
+        It will call the PB webhook "attendance_marked_webhook" with service-communication-secret to tell course_session_id, user_id, status.
+    If status = "absent" then
+        It will put an entry in db, in attendance_history 
+            - (user_id, course_session_id, remark, status, device_config:null, ip_address:null, scanned_at: null)
+            returning attendance_history_id.
+        If the session_id, user_id pair exists in attendance table then it will replace else create - with same data.
+            returning attendance_id.
+        If the org has kept live_attendance_trigger true, then it will call the webhook url with the alias data.
+            If it receives 2XX status code then it will considered as processed else failed.
+            The data will be stored in webhook_history table. 
+        It will call the PB webhook "attendance_marked_webhook" with service-communication-secret to tell course_session_id, user_id, status.
 
 FTA / FTF can mark the student as present / absent manually.
-It will directly create / update the entry `{course_id}_{session_id}_{user_id}` in the dynamoDB.
-It will have ```remark: "Admin triggered - {user_id}", status: "absent", scanned_timestamp: null, created_at: "..."```.
-Note that the value object will be pushed as a new item in the array.
-It will the call AWLS (with course_id, session_id, user_id, remark: "Admin triggered - {user_id}", status: "absent", scanned_timestamp: "...", created_at: "...", org's webhook url, alias data)
-Then it will send SSE to all connected Admins / Faculties of that course_id.
+The request will be given to SQS --> LALW with 
+    hashes (with scanned timestamps), remark: "Admin triggered", status: "absent", remarked_by_user_id,
+    course_id, course_session_id, user_id,
+    secret (org specific), org's webhook url and alias data.
+
+
+
 
 FTA / FTF will have two views for each session in the course:
     Live view where 
@@ -184,13 +180,9 @@ FTA / FTF will have two views for each session in the course:
                     then they will be marked present / absent as per their status.
                     Others will be shown as "yet to mark".
                     As it receives the info from SSE, it will update the attendance status of the students.
-                    It will also refetch to get attendance table (pg) records every 10 seconds 
-                        and the unique students marked present in db but "yet to mark" on UI will be updated to present.
+                    It will NOT refetch. Admin can refetch manually.
             if it return empty then
                 a button is shown to start attendance session
     Report view
         it will show the attendance stats as per the pg_table.
         the data will be re-fetched on page refresh only.
-        if there is any pending / unprocessed entry for the course_id + session_id in the ACLS_task_queue
-        then a corresponding notice will be shown "A processing is scheduled to happen in X+15 seconds. Please wait till then."
-        Where X is the scheduled_at timestamp for the task.
