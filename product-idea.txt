@@ -17,7 +17,7 @@ User Agent Identifier - UAI (browser.name + os.name + device.vendor + device.mod
 
 FTSA can create a organization.
 FTSA can create a admin.
-FTSA can assign an admin to organization (many-to-many).
+FTSA can assign an admin to an organization (one org per admin, via users.org_id - not many-to-many).
 FTSA create P_O, P_B, P_C (which govern RBAC).
 
 FTA can create batches.

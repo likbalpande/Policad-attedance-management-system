@@ -1,8 +1,17 @@
 Frontend_App (FT) - React + Vite + Typescript + Capacitor 
-Primary_Backend (PB) - Express + Typescript + Prisma + PostgreSQL (Supabase) (in future AWS RDS)
+Primary_Backend (PB) - Express + Typescript + Drizzle + PostgreSQL (Supabase) (in future AWS RDS)
 Live_Attendance_Gateway (LAG) - Express + Typescript
-Live_Attendance_Lambda_Worker (LALW) - Express + Typescript
+Live_Attendance_Lambda_Worker (LALW) - Express + Typescript locally, AWS Lambda in production
 SQS is put in between LAG & LALW
+
+This is a pnpm monorepo rooted at platform/ (apps/ + packages/).
+
+# Architecture
+Before implementing any code changes anywhere in platform/, load the
+`/architecture` skill (.claude/skills/architecture/SKILL.md). It is the
+canonical, up-to-date reference for monorepo tooling, shared packages, the
+DB-access rule (only @platform/dal may query the DB), and per-app folder
+structure. Keep it updated whenever an architecture decision changes.
 
 # Prompt Logging
 Every user message and every AskUserQuestion (question + selected option) is automatically

@@ -1,0 +1,121 @@
+Create a production application with typescript.
+Make sure to follow these rules:
+
+1. We will keep separate modules.
+   The path would look like this src/app/<module-name>
+
+2. Inside every module we will follow this structure:
+    <module-name>.routes.ts
+    dto/<method>-<module-name>.dto.ts
+    controllers/<module-name>.<controller-name>.controller.ts
+    services/<module-name>.<service-name>.service.ts
+
+    Services call @platform/dal for any DB read/write. This app never
+    imports @platform/db and never runs a query directly - @platform/dal is
+    the only package allowed to do that (shared with LALW, and LAG if it
+    ever needs DB access).
+
+3. Inside the src folder, we will have
+    these folders:
+        app
+        constants
+        middlewares
+        utils
+        config
+        types
+        logger
+
+    and these files:
+        app.ts
+        server.ts
+
+    middlewares/ and utils/ here are for app-specific concerns only.
+    Generic response/error/validation-middleware/asyncHandler code lives in
+    @platform/http (see rule 6/7/8/9 below), and logger/ is a thin wrapper
+    around @platform/logger (see rule 5).
+
+4. Use functional programming way for writing code.
+    You can use classes for specific usecases like
+    creating error class or logger class or ...
+
+5. Use winston logger for logging, via the shared @platform/logger factory
+    (createLogger({ service: 'platform-backend' })). Use this logger
+    utility everywhere to log entry / exit to controller, services and DAL
+    calls. Also log exceptions and errors. Never use console.log directly.
+
+6. Use the ApiSuccessResponse and ApiErrorResponse classes from
+    @platform/http. Do not redefine these locally.
+
+7. Use the error classes from @platform/http (extend them locally only if
+    PB needs an error type that's genuinely specific to this app).
+    These errors will be thrown at required places.
+
+8. The error handling is done by the shared error-handling middleware from
+    @platform/http, registered once in app.ts.
+
+9. Use the shared asyncHandler utility from @platform/http to ease the
+    error handling flow.
+
+10. Use zod for DTOs. Infer typescript types from zod schemas.
+
+11. Use Drizzle ORM with drizzle-kit for migrations. The schema, the
+    Drizzle client, and the migrations themselves live in packages/db, not
+    in this app - PB only ever consumes @platform/dal's repository
+    functions, which are the sole consumer of packages/db.
+
+12. Env will be extracted in config/env.config.ts
+
+13. Use the shared Zod validation middleware from @platform/http to
+    validate request DTOs against their zod schemas.
+
+14. Keep an identifier in .env for two environments.
+    We will keep same .env for development, production.
+
+15. Purpose of these files:
+        app.ts:
+            - Register middlewares
+            - Register routers
+
+        server.ts:
+            - load env
+            - init DB connection (via @platform/db, through @platform/dal)
+            - create express app
+            - start server
+
+16. Postgres via Supabase now, will move to AWS RDS in future. The
+    connection itself is configured inside packages/db - this app does not
+    manage the connection directly.
+
+17. API response convention:
+    Success:
+        {
+            success: true,
+            message: "...",
+            data: {...}
+        }
+
+    Error:
+        {
+            success: false,
+            message: "...",
+            errors?: [...]
+        }
+
+18. Setup these middlewares in app.ts:
+    cors
+    helmet
+    express.json
+    cookie-parser
+    morgan
+
+19. Have a health check API "/health"
+
+20. This project does not have any testing setup requirement right now, but
+    code should be written in such a pattern (services kept framework-
+    agnostic, no logic tightly coupled to Express req/res) that testing
+    becomes possible as an extended feature in future if required.
+
+21. Workspace packages used by this app are imported under the @platform/
+    scope: @platform/db (not imported directly, only via @platform/dal),
+    @platform/dal, @platform/http, @platform/logger, @platform/types,
+    @platform/permissions, @platform/uai, @platform/crypto.

@@ -1,0 +1,282 @@
+Discussion Summary - 01 Aug 2026 - Basic Setup
+================================================
+
+PART 1: product-idea.txt / table-structure.txt gap analysis
+-------------------------------------------------------------
+Reviewed product-idea.txt and table-structure.txt for gaps, typos, and mismatches.
+All items below were discussed and fixes were applied to both files.
+
+1. P_E (Event Access Permissions) dropped entirely.
+   - Reason: events are just `courses` rows with type = 'event', not a separate entity.
+     access_identifiers.type / admin_permissions_config_groups.type never supported
+     an "event" enum value, so P_E was unimplementable as originally written.
+   - Fix: all P_E references in product-idea.txt now read P_C. Permission list
+     (P_O, P_B, P_C) updated accordingly. Stray "P_D" typo on the same line removed.
+
+2. users table - added login_count (staff) and password_version (student) as two
+   separate columns.
+   - login_count: increments on every successful login (staff: super_admin/admin/faculty).
+     Used to validate refresh-token renewal (payload login_count must match DB).
+   - password_version: increments +1 every time a student's password is regenerated.
+     Used for per-request validation via users_on_alert_map and for refresh eligibility.
+
+3. attendances / attendance_history - device_config, ip_address, scanned_at made
+   NULLable (were NOT NULL, contradicting the idea's explicit null values for
+   status = "absent" entries).
+
+4. Renamed idea-doc references from "attendance_session_records" /
+   "session_start_timestamp" to match the real table:
+   attendance_session_invocations / course_session_id / invoked_by_user_id /
+   invocation_start_timestamp.
+
+5. New table org_daily_secrets (id, org_id, secret, generated_at) - stores the
+   per-org daily QR-hash secret described in the idea (previously had no backing
+   storage at all).
+
+6. location_info / location_lat / location_long / location_point on attendances
+   and attendance_history - confirmed as a planned feature (geofencing), not yet
+   specced. Marked as a TODO in product-idea.txt rather than implemented now.
+
+7. Alias data - confirmed alias is per-user, org-scoped only (users.alias), NOT
+   per (user_id, course_id, course_session_id) as the idea's wording implied.
+   No new mapping table needed; product-idea.txt reworded accordingly.
+
+8-11. Typo/structural fixes in table-structure.txt:
+   - users.alisa -> users.alias
+   - batch_tag table renamed to batch_tags (fixes a dangling FK - batch_tag_map
+     already referenced "batch_tags", table itself was singular)
+   - organizations.live_attendance_trigger - added missing BOOLEAN type
+   - users.allow_password_login - added missing BOOLEAN type (same class of bug,
+     caught while applying fix #10)
+   - webhook_history - added the missing updated_at column (indexes referenced it
+     but it didn't exist)
+
+12. created_at / updated_at added to every table as a standard convention.
+    Pure mapping/log tables (user_permissions, batch_students, course_batch,
+    course_tag_map, batch_tag_map, admin_permitted_access_identifiers,
+    attendance_session_invocations, attendance_history) got created_at only.
+    Mutable entity tables got both created_at and updated_at.
+
+13. Removed stray "P_D" from product-idea.txt line 22 (covered under item 1).
+
+14. users.password - confirmed PLAIN TEXT storage (explicit, deliberate decision
+    by user after being warned of the security risk of storing passwords
+    unhashed - DB compromise would expose every user's password in the clear).
+    Column stays VARCHAR(50) with an inline comment flagging this is intentional.
+
+15. users.allow_password_login - clarified purpose: for non-student users
+    (admin/faculty/super_admin) with this flag true, the SAME OTP input field
+    can alternatively accept their password. Flow: submitted value checked
+    against users.otp first (5 min expiry) -> falls back to users.password if
+    no match and allow_password_login = true.
+    New users columns added to support this: otp VARCHAR(10), otp_generated_at.
+    OTP delivered via email. OTP TTL = 5 minutes.
+    IMPORTANT: Students NEVER use the OTP flow at all - they always log in via
+    the separate password-based flow (one-time password at creation, replaced
+    by a random password after first use, rotated via password_version). This
+    was re-confirmed explicitly and the doc wording was tightened to remove any
+    implication that students default to OTP.
+
+16. 120s (block double-start) vs 110s (is_ongoing_attendance_session) timing
+    difference confirmed as an intentional 10s buffer, not a bug. No change.
+
+17. Added a DB-level type-consistency constraint for
+    admin_permitted_access_identifiers: denormalized `type` column + composite
+    FKs (permission_config_group_id, type) -> admin_permissions_config_groups
+    (id, type) and (access_identifier_id, type) -> access_identifiers(id, type).
+    Both parent tables got a UNIQUE(id, type) constraint to support this.
+    Guarantees a config group and its linked access identifiers can never have
+    mismatched types, enforced by Postgres itself (no app-layer check needed).
+
+18. product-idea.txt line 27 - "FTA can assign a faculty to batch ... with P_C"
+    was a typo, fixed to P_B (matches the pattern: batch-scoped actions check
+    P_B, course-scoped actions check P_C).
+
+Explicitly skipped:
+   - Adding an alias column to organizations table - user said skip this.
+
+
+PART 2: Code architecture & setup
+-----------------------------------
+Existing (empty) scaffold found in repo:
+   platform/apps/{frontend, platform-backend, live-attendance-gateway,
+   live-attendance-lambda-worker}
+   platform/packages/  (empty)
+
+Decisions made:
+
+1. Monorepo tooling
+   - Package manager: pnpm (fast, disk-efficient, strict dependency resolution,
+     mature compat with Prisma + Capacitor - avoid yarn Berry/PnP for this stack).
+   - Task orchestrator: none for now (plain pnpm workspace scripts). Revisit
+     Turborepo later if build/dev-loop pain shows up - not worth the setup cost
+     yet with only 4 apps and an empty packages/.
+
+2. LALW deployment model
+   - Hybrid: Express app + SQS consumer loop locally (against LocalStack in
+     Docker); real AWS Lambda (SQS-triggered) in production.
+   - Requires decoupling business logic from the runtime shell:
+       core/consumer logic (process one message) is framework-agnostic and
+       shared between both entrypoints.
+       local/server.ts -> Express shell (health check only) + SQS long-poll
+       loop calling the shared consumer logic.
+       lambda/handler.ts -> real AWS Lambda entrypoint (exports.handler over
+       SQSEvent.Records), calling the same shared consumer logic.
+   - Local SQS emulation: LocalStack (Docker-based AWS emulator; also covers
+     future needs like S3 for org logo uploads).
+   - Production Lambda is purely event-driven - NO HTTP surface in prod.
+     Express is confined to the local/ dev shell only, not a prod dependency.
+
+3. Shared packages/ contents
+   - packages/types - cross-service contracts (PB<->LAG, LAG<->LALW SQS
+     payload, LALW<->PB webhook payload, FT<->PB API shapes).
+   - packages/permissions - permission-identifier constants + P_O/P_B/P_C
+     types, used by both PB (RBAC checks) and FT (conditional UI rendering).
+   - packages/uai - UAI-generation logic (ua-parser-js based). MUST be shared
+     identically between FT (client-side "origin" hash) and PB/LAG
+     (verification) - any drift breaks login.
+   - packages/crypto - asymmetric sign/verify helpers shared between PB
+     (signs) and LAG (verifies), keeping algorithm/padding choices in sync.
+   - packages/db - SHARED schema + client + migrations only (infra layer).
+     ORM CHANGED from Prisma to Drizzle - see PART 3, item 1.
+   - packages/dal - the ONLY package allowed to import packages/db and run
+     queries against it. Every app (PB, LALW, and LAG if it ever needs DB
+     access) calls into packages/dal's repository functions - no app talks
+     to the DB directly. See PART 3, item 3.
+   - packages/http - ApiSuccessResponse/ApiErrorResponse, error classes,
+     asyncHandler, Zod validation middleware, generic error-handling
+     middleware. Shared across PB/LAG (and LALW's local health-check shell).
+     See PART 3, item 4.
+   - packages/logger - Winston logger instance factory, so every service's
+     entry/exit/error logs look identical, tagged with a different `service`
+     name per app. See PART 3, item 4.
+   - packages/tsconfig, packages/eslint-config - shared compiler/lint config
+     across all 4 apps.
+   - Workspace package naming convention: @platform/<package-name>
+     (e.g. @platform/db, @platform/dal, @platform/http, @platform/logger,
+     @platform/types, @platform/permissions, @platform/uai, @platform/crypto).
+
+4. Common backend layering concepts (PB / LAG / LALW) - SUPERSEDED for PB,
+   see PART 3. Originally proposed as one identical flat-layered shape for
+   all three services (routes/controllers/services/repositories/...). This
+   was revisited in PART 3 once PB's actual resource count was considered:
+   PB now uses a feature/module-based structure instead. LAG (thin, no DB
+   access per the idea) and LALW (message-driven, no routes/controllers at
+   all) still fit a flat/minimal shape. Shared concepts that survived across
+   all three regardless of layout:
+   - Validation library: Zod (TS-first, infers static types from schemas,
+     composes well with packages/types).
+   - Controllers kept as a separate layer from routes (routes stay pure path +
+     middleware wiring; services stay framework-agnostic and easier to unit
+     test without mocking Express req/res).
+   - No app owns its own DB access code - see packages/dal above and PART 3.
+
+5. LALW's structural difference from PB/LAG
+   Keeps services/validators/utils/errors layers (calls @platform/dal for
+   any DB access, same as every other app - no local repository files).
+   Replaces routes/controllers/app.ts/server.ts with:
+     consumer/process-message.ts - the SQS-equivalent of a controller:
+       takes one parsed SQS message, calls services/ in order. This is the
+       single piece both entrypoints below call into.
+     local/server.ts - Express shell + SQS long-poll loop (LocalStack) in dev.
+     lambda/handler.ts - real AWS Lambda entrypoint in prod.
+
+
+PART 3: PB folder structure (reconciling platform-backend/backend-folder-structure-prompt.txt)
+--------------------------------------------------------------------------------------------
+Found an existing prompt file at
+platform/apps/platform-backend/backend-folder-structure-prompt.txt (written
+before this discussion). It conflicted with PART 2 decisions in a few ways;
+resolved as follows and the file itself was rewritten to match.
+
+1. ORM: SWITCHED from Prisma to Drizzle (+ drizzle-kit for migrations).
+   Reason: matches the prompt file's original intent, and Drizzle has a
+   notably better cold-start/bundle-size story for LALW's Lambda than
+   Prisma's engine binary. packages/db was Prisma in PART 2 - that's now
+   outdated, packages/db is Drizzle.
+
+2. PB folder paradigm: feature/module-based, NOT the flat layered structure
+   from PART 2 item 4. Reason: PB is by far the largest app (organizations,
+   users, batches, courses, sessions, tags, permissions, attendance,
+   webhooks, ...) - a flat routes/controllers/services/ shape would flatten
+   into noisy folders holding 15+ unrelated files each. LAG and LALW are
+   thin enough that this doesn't apply to them.
+
+   PB structure:
+     platform/apps/platform-backend/
+       src/
+         app/
+           <module-name>/
+             <module-name>.routes.ts
+             dto/<method>-<module-name>.dto.ts   (zod schema, TS type inferred)
+             controllers/<module-name>.<controller-name>.controller.ts
+             services/<module-name>.<service-name>.service.ts
+                 -> calls @platform/dal functions, never touches the DB
+                    client directly
+         constants/
+         middlewares/     - PB-specific only (e.g. RBAC/permission-check
+                             middleware against @platform/permissions).
+                             Generic error/validation middleware now lives
+                             in @platform/http instead of being local.
+         utils/             - PB-specific helpers only
+         config/env.config.ts
+         types/
+         logger/              - thin wrapper: createLogger({ service:
+                                  'platform-backend' }) from @platform/logger
+         app.ts                 - register middlewares + routers
+         server.ts                - load env, init DB connection, create
+                                     express app, start server
+
+3. Shared centralized DAL (bigger change than PART 2's per-app
+   repositories/ idea): NO app may talk to the DB directly, only through
+   @platform/dal. Split into two packages, not one:
+     packages/db  - schema + Drizzle client + migrations only (infra layer)
+     packages/dal - repository functions, organized by resource, the ONLY
+                    package allowed to import packages/db and query it.
+                    PB, LALW, and (if ever needed) LAG all call into this,
+                    never into packages/db directly.
+   This replaces the earlier per-module repository/ folder idea inside PB
+   entirely - services/ call @platform/dal, full stop.
+
+4. New shared packages formalized (were only "candidates" in PART 2):
+     packages/http   - ApiSuccessResponse/ApiErrorResponse, error classes,
+                        asyncHandler, Zod validation middleware, generic
+                        error-handling middleware. Used by PB, LAG, and
+                        LALW's local health-check shell.
+     packages/logger - Winston logger instance factory (entry/exit/error
+                        logging convention, tagged by `service` name).
+   These came from the prompt file's own item 14 suggestion ("these can go
+   in common packages").
+
+5. Other conventions carried over from the prompt file (kept, no conflict):
+   - Functional programming style; classes only for specific cases (error
+     classes, logger class, etc.)
+   - API response convention:
+       success: { success: true, message, data }
+       error:   { success: false, message, errors? }
+   - Standard middleware stack per HTTP-serving app: cors, helmet,
+     express.json, cookie-parser, morgan.
+   - Health check endpoint "/health".
+   - No mandatory test setup right now, but code must be written so tests
+     can be added later without restructuring (keep services framework-
+     agnostic, avoid tightly coupling logic to Express req/res).
+   - .env: one file shared across dev/prod, distinguished via an identifier
+     inside it (not separate .env.development / .env.production files).
+
+ARCHITECTURE RULES SAVED AS A PROJECT SKILL:
+All of PART 2 + PART 3's code-architecture rules (not the product-idea /
+table-structure content from PART 1) were consolidated into a project
+Claude skill at .claude/skills/architecture/SKILL.md, and CLAUDE.md was
+updated to point future implementation work at it. Treat that skill file as
+the canonical/up-to-date source for architecture rules going forward - this
+summary file is a point-in-time discussion log, the skill is what actually
+gets loaded and followed during implementation.
+
+
+Still open / not yet discussed:
+   - FT's internal folder structure.
+   - Testing strategy.
+   - CI setup.
+   - Local dev docker-compose (Postgres, LocalStack, etc.) - not yet built.
+   - PB's constants/ contents, middlewares/ specifics beyond RBAC, and
+     config/env.config.ts conventions in detail.
