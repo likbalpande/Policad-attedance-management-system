@@ -11,20 +11,19 @@ Frontend part specific for super admins - FTSA
 
 Organization Access Permissions - P_O
 Batch Access Permissions - P_B
-Course Access Permissions - P_C
-Event Access Permissions - P_E
+Course Access Permissions - P_C (also governs events, since events are courses with type = 'event')
 
 User Agent Identifier - UAI (browser.name + os.name + device.vendor + device.model + device.type + cpu.architecture) (ua-parser-js)
 
 FTSA can create a organization.
 FTSA can create a admin.
 FTSA can assign an admin to organization (many-to-many).
-FTSA create P_O, P_D, P_B, P_C, P_E (which govern RBAC).
+FTSA create P_O, P_B, P_C (which govern RBAC).
 
 FTA can create batches.
 FTA can create courses.
 FTA can create faculty.
-FTA can assign a faculty to batch (optional, many-to-many) with P_C.
+FTA can assign a faculty to batch (optional, many-to-many) with P_B.
 FTA can assign a faculty to course (many-to-many) with P_C.
 FTA can create / edit students.
 FTA can add student to batch (many-to-many).
@@ -40,12 +39,12 @@ All admins in an organization have VIEW access to students / batches / courses /
 
 FTF can view / create / edit students (if has corresponding P_O).
 FTF can add student to batch (if has corresponding P_B).
-FTF can edit course / event details (if has corresponding P_C / P_E).
+FTF can edit course / event details (if has corresponding P_C).
 FTF can create new session in course / event.
 FTF can start the attendance (QR based) for the particular sessions (if has corresponding P_C).
-FTF can start the attendance (QR based) for the event (if has corresponding P_E).
-FTF can view the attendance status for the session (if has corresponding P_C / P_E).
-FTF can toggle the attendance status manually for that session with remark (if has corresponding P_C / P_E).
+FTF can start the attendance (QR based) for the event (if has corresponding P_C).
+FTF can view the attendance status for the session (if has corresponding P_C).
+FTF can toggle the attendance status manually for that session with remark (if has corresponding P_C).
 
 Faculties and Admins can see list of admins / faculties in the course / events (as long as they have view access to it).
 
@@ -66,6 +65,10 @@ There will be no signup api.
 
 The login api will remain same for super-admin / admin / faculty.
 It will be OTP based login.
+Students never use this OTP-based flow - they always log in via the password-based flow described later in this document.
+The OTP is generated on login request and stored in users.otp along with users.otp_generated_at.
+The OTP is valid for 5 minutes from users.otp_generated_at, and is delivered to the user via email.
+login_count in users table is incremented on every successful login. This invalidates any refresh token issued before that login.
 The access token only lives for 15 minutes. Then, it is renewed on expiry but within 7 days.
 The only condition to renew is that login_count in DB should match the login_count in payload.
 The access token (JWT) will be done using asymmetric hashing.
@@ -73,6 +76,12 @@ The access token hash the data with private key 1.
 The data (payload) will have a "origin" key which has value as hash (it will be created using UAI).
 This hash will again be a asymmetric hash. It will be done using private key 2.
 The public key 1 & 2 will be shared to other micro-services via API request by validating the service-communication-secret.
+
+For non-student users (admin / faculty / super-admin) with users.allow_password_login = true,
+the same OTP input field can alternatively accept their password instead of the OTP:
+    The submitted value is first checked against users.otp (respecting the 5 minute expiry).
+    If it does not match (or the OTP has expired) and allow_password_login = true, it is checked against users.password instead.
+This section does not apply to students - they always log in via password, as described below, never via OTP.
 
 The login of student will happen through one time password generated while user creation (version: 1).
 As soon as the password is used, the random hard password will be created and placed in its place.
@@ -92,17 +101,17 @@ The access token only lives for 1 day. Then, it is renewed on expiry but within 
 The only condition to renew is that password_version in DB should match the password_version in payload.
 
 For the session, the admin / faculty will start the attendance session using FTF/FTA.
-It can only start the session if there is no ongoing entry in "attendance_session_records" (< 2 minutes from now).
+It can only start the session if there is no ongoing entry in "attendance_session_invocations" (< 2 minutes from now).
 FTF/FTA will send the request to PB. PB will authenticate it, validate the course_id, access_level and then generate 120 tokens.
 i-th token is a hash of timestamp (in seconds) (i second ahead of now) + course_session_id + secret.
-The secret will be generated at 12am everyday for each organization and then stored in the DB.
-Whenever server starts, it will pull that secret from the DB for each organization.
-Whenever a session is requested, the attendance_session_records will be inserted with course_id, session_id, user_id, session_start_timestamp, created_at.
+The secret will be generated at 12am everyday for each organization and then stored in org_daily_secrets (org_id, secret, generated_at).
+Whenever server starts, it will pull the latest secret per organization from org_daily_secrets.
+Whenever a session is requested, the attendance_session_invocations record will be inserted with course_session_id, invoked_by_user_id, invocation_start_timestamp, created_at.
 Response from the server will ~ look like { "course_session_id", "...", hashes: { "ith-timestamp":"hash", ...} }
 
-For is_ongoing_attendance_session API, it will check if there is a entry in attendance_session_records which has session_start_timestamp < 110 seconds from now.
-If yes, then it will create 120 tokens as per that session_start_timestamp, else send empty response.
-i-th token is a hash of timestamp (in seconds) (i second ahead of session_start_timestamp) + course_id + session_id + secret.
+For is_ongoing_attendance_session API, it will check if there is a entry in attendance_session_invocations which has invocation_start_timestamp < 110 seconds from now.
+If yes, then it will create 120 tokens as per that invocation_start_timestamp, else send empty response.
+i-th token is a hash of timestamp (in seconds) (i second ahead of invocation_start_timestamp) + course_id + session_id + secret.
 Response from the server will ~ look like { "course_session_id", "...", hashes: { "ith-timestamp":"hash", ...} }
 
 For attendance_marked_webhook API, it will see all the connected admins / faculties for the given course_session_id and then send SSE to them. 
@@ -116,7 +125,9 @@ For get_attendance_status API, the user will only send the user_id and course_se
 
 The FTF/FTA will render the QR corresponding to each hash for each timestamp.
 The FTS will scan the QR and simultaneously store the scanned hash value, timestamp, course_session_id will be stored in FTS memory.
-Once the number of hashes = 10, the list will be sent to LAG along with scanned timestamps, course_session_id. 
+Once the number of hashes = 10, the list will be sent to LAG along with scanned timestamps, course_session_id.
+
+TODO: location capture (location_info / location_lat / location_long / location_point on attendances & attendance_history) is planned (e.g. geofencing) but not yet specified - capture logic, validation rules and consumer are still to be defined.
 
 It will wait for the response from LAG and 
     then poll PB "get_attendance_status" at 5s, 15s, 30s, 60s, 75s, 90s, 105s, 120s - for status.
@@ -134,8 +145,7 @@ The request will be given to SQS --> LALW with
     hashes (with scanned timestamps), remark: "qr based attendance", status: "present"
     course_id, course_session_id, user_id, ip_address, device_config,
     secret (org specific), org's webhook url and alias data.
-Note: alias data is basically the data which admin has aliased for user_id, course_id, course_session_id.
-The alias mapping will also be stored in a pg.
+Note: alias data is basically the data which admin has aliased for the user (users.alias), scoped to their organization.
 
 In LALW,
     If status == "present" then 
