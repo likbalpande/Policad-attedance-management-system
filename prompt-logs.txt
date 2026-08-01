@@ -1,0 +1,97 @@
+[2026-08-01T08:17:52.664Z] USER_MESSAGE
+read product-idea.txt and table-structure.txt
+then identify gaps, basic typos or errors or mistakes
+help me find the gap in product idea (if exist) and then discuss things
+---
+[2026-08-01T08:22:02.661Z] QUESTION
+Q: Which thread do you want to dig into first?
+Selected: everything that you mentioned one-by-one in the same order
+---
+[2026-08-01T08:23:35.014Z] QUESTION
+Q: How do you want to resolve the P_E vs P_C gap?
+Selected: I had written P_E earlier but then i dropped the idea of keeping events seperate bcoz its schema is same as course, so added a type to couse, so P_E is not required anymore
+---
+[2026-08-01T08:24:42.405Z] QUESTION
+Q: Should login_count and password_version be separate columns, or one shared counter?
+Selected: Separate columns (Recommended)
+Q: What should increment login_count?
+Selected: Every successful login (Recommended)
+---
+[2026-08-01T08:26:49.454Z] QUESTION
+Q: How should we resolve the NOT NULL vs null-for-absent contradiction?
+Selected: Make columns nullable (Recommended)
+---
+[2026-08-01T08:27:17.356Z] QUESTION
+Q: How should we resolve the attendance_session_records naming drift?
+Selected: Update product-idea prose to match table (Recommended)
+---
+[2026-08-01T08:27:39.967Z] QUESTION
+Q: How should we store the daily per-org QR secret?
+Selected: New history table (Recommended)
+---
+[2026-08-01T08:28:00.339Z] QUESTION
+Q: What's the status of the location_* columns on attendances/attendance_history?
+Selected: Planned feature, needs writing up
+---
+[2026-08-01T08:29:37.681Z] QUESTION
+Q: What's the correct scope for the user/course alias?
+Selected: Per (user_id, org_id)
+---
+[2026-08-01T08:30:00.317Z] QUESTION
+Q: Should created_at/updated_at be added to all tables as a standard convention?
+Selected: Yes, add to all tables (Recommended)
+---
+[2026-08-01T08:32:26.569Z] QUESTION
+Q: Item 12: Is P_D in idea line 22 just a stray typo that should be removed (leaving P_O, P_B, P_C)?
+Selected: Yes, remove it (Recommended)
+Q: Item 15: Is the 120s (double-start block) vs 110s (is_ongoing check) difference an intentional buffer?
+Selected: Yes, intentional 10s buffer (Recommended)
+Q: Item 16: Should type-consistency between admin_permissions_config_groups and access_identifiers be enforced at the DB level?
+Selected: is there possibility to add db constraint? if yes then add
+---
+[2026-08-01T08:33:12.762Z] USER_MESSAGE
+lets discuss
+---
+[2026-08-01T08:34:46.759Z] QUESTION
+Q: What hashing algorithm should the password column be sized for?
+Selected: plain text
+Q: What is allow_password_login meant to control?
+Selected: except student, anyone else flagged true can put in password in the otp input text field and pass the login 
+---
+[2026-08-01T08:35:14.039Z] QUESTION
+Q: Password storage — plaintext or hashed?
+Selected: Plain text, confirmed
+---
+[2026-08-01T08:35:57.340Z] QUESTION
+Q: How should the backend distinguish an OTP from a password in the shared input field?
+Selected: OTP column in users table
+---
+[2026-08-01T08:36:28.626Z] QUESTION
+Q: Should the OTP expire after a fixed time window?
+Selected: Yes, fixed expiry window (Recommended)
+Q: What channel delivers the OTP to the user?
+Selected: Email
+---
+[2026-08-01T08:36:42.656Z] QUESTION
+Q: How long should the OTP remain valid?
+Selected: 5 minutes (Recommended)
+---
+[2026-08-01T08:36:55.793Z] USER_MESSAGE
+yes
+---
+[2026-08-01T08:51:36.115Z] QUESTION
+Q: Line 27: "FTA can assign a faculty to batch (optional, many-to-many) with P_C." — should this be P_B instead?
+Selected: Yes, fix to P_B (Recommended)
+---
+[2026-08-01T08:51:50.633Z] USER_MESSAGE
+Note:
+1. Students cannot do OTP based login, they can only do password login
+2. User has a alias, course has a alisa, org has alias
+---
+[2026-08-01T08:53:29.574Z] QUESTION
+Q: For item 2 — what's the actual change needed?
+Selected: skip this
+---
+[2026-08-01T08:54:16.969Z] USER_MESSAGE
+lets now focus & discuss on code architecture and setup
+---
