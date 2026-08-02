@@ -87,18 +87,33 @@ The login of student will happen through one time password generated while user 
 As soon as the password is used, the random hard password will be created and placed in its place.
 
 Admin / Faculty with P_O can create a new password for the student.
-When ever the new password is generated, 
+When ever the new password is generated,
     password_generated_at field is updated in users table.
-    The password_version is updated +1.
-    Every server downloads the list  of users with password_generated_at < 2 days and saves it in memory (say users_on_alert_map). 
-    Server refetch it every 5 minutes.
+    login_count is incremented +1 (same counter used for login-based invalidation below) - this
+    invalidates any session that was live at the time of the reset, at that session's next refresh,
+    even if the student never logs in again.
+
+Students only ever have one valid session at a time (to stop account sharing for attendance
+marking). This is enforced via last_login_at + login_count, both in the users table:
+    On every successful student login, login_count is incremented +1 and last_login_at is set to now().
+    If last_login_at was already within the access token's TTL window (i.e. a previous session could
+    still be alive right now), this is a concurrent login - a signal for a future per-request check
+    (see below), not just a refresh-time one.
+    The access token payload carries login_count (same field/shape as staff tokens).
 
 The access token creation for student will hash the data against private key.
-For access token validation in api call, it will check from users_on_alert_map that user id exists or not.
-If it exists then password version in payload should match that in the map.    
 The data (payload) will have a "origin" key which has value as hash (it will be created using UAI).
-The access token only lives for 1 day. Then, it is renewed on expiry but within 30 days.
-The only condition to renew is that password_version in DB should match the password_version in payload.
+The access token only lives for 1 day. Then, it is renewed on expiry but within 31 days.
+The only condition to renew is that login_count in DB should match login_count in payload -
+same check as staff, just checked at refresh time only for now (no per-request check yet).
+
+FUTURE WORK (not yet implemented, needs LAG): because the access token TTL is 1 day, a concurrent
+login (see above) only gets rejected at the stale session's next refresh, up to a day later - long
+enough for real-time attendance-marking abuse. Closing that gap needs a per-request check on the
+attendance-marking path (LAG), similar in spirit to the old users_on_alert_map idea, but keyed off
+concurrent-login detection (last_login_at vs TTL window) rather than "recently logged in" - the
+latter would match ~100% of active students on any given day (holding a live token implies a recent
+login) and defeats the point of keeping the checked set small.
 
 For the session, the admin / faculty will start the attendance session using FTF/FTA.
 It can only start the session if there is no ongoing entry in "attendance_session_invocations" (< 2 minutes from now).
@@ -155,7 +170,7 @@ In LALW,
             returning attendance_history_id.
         If the session_id, user_id pair exists in attendance table then it will replace else create - with same data.
             returning attendance_id.
-        If the org has kept live_attendance_trigger true, then it will call the webhook url with the alias data.
+        If the org has kept has_live_attendance_trigger true, then it will call the webhook url with the alias data.
             If it receives 2XX status code then it will considered as processed else failed.
             The data will be stored in webhook_history table. 
         It will call the PB webhook "attendance_marked_webhook" with service-communication-secret to tell course_session_id, user_id, status.
@@ -165,7 +180,7 @@ In LALW,
             returning attendance_history_id.
         If the session_id, user_id pair exists in attendance table then it will replace else create - with same data.
             returning attendance_id.
-        If the org has kept live_attendance_trigger true, then it will call the webhook url with the alias data.
+        If the org has kept has_live_attendance_trigger true, then it will call the webhook url with the alias data.
             If it receives 2XX status code then it will considered as processed else failed.
             The data will be stored in webhook_history table. 
         It will call the PB webhook "attendance_marked_webhook" with service-communication-secret to tell course_session_id, user_id, status.

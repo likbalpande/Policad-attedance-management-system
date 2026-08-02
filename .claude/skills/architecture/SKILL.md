@@ -29,22 +29,192 @@ intent, not a guarantee of current state.
   ```
 - Workspace package import scope: **`@platform/<package-name>`**
   (e.g. `@platform/db`, `@platform/dal`, `@platform/http`, `@platform/logger`,
-  `@platform/types`, `@platform/permissions`, `@platform/uai`,
+  `@platform/types`, `@platform/permissions`, `@platform/enums`, `@platform/uai`,
   `@platform/crypto`, `@platform/tsconfig`, `@platform/eslint-config`).
+- `platform/.npmrc` sets `enable-pre-post-scripts=true` - required for pnpm to
+  auto-run each package's `prebuild` script (see Build tooling below); pnpm
+  does not do this by default. Don't remove it without replacing the build
+  scripts' reliance on `prebuild`.
+
+### Build tooling
+
+Every buildable package/app uses **tsup** (esbuild-based) for `build`, not
+`tsc` directly - much faster, but esbuild strips types without checking them.
+To not lose type safety, every package's `build` script is preceded by a
+`prebuild` script that runs `tsc --noEmit`:
+```json
+"prebuild": "pnpm run typecheck",
+"build": "tsup src/index.ts --format cjs --dts --sourcemap --clean",
+"typecheck": "tsc -p tsconfig.json --noEmit"
+```
+Packages (consumed as libraries) build with `--dts` to emit `.d.ts`; apps
+(executables, e.g. platform-backend's `tsup src/instrumentation.ts ...`)
+don't need `--dts`. `dev` scripts (e.g. PB's `tsx watch src/instrumentation.ts`)
+are unaffected - tsup is a build-time swap only.
 
 ## Shared packages (`platform/packages/`)
 
 | Package | Contents | Used by |
 |---|---|---|
-| `db` | Drizzle schema, Drizzle client, drizzle-kit migrations. **Infra layer only.** | Only `dal` may import this. |
+| `db` | Drizzle schema, Drizzle client, drizzle-kit migrations. **Infra layer only.** Depends on `permissions` + `enums` purely for `.$type<T>()` column annotations (see "Application-level enum columns" below) - this doesn't change who may import `db` itself. | Only `dal` may import this. |
 | `dal` | Repository functions, organized by resource (e.g. `users.repository.ts`, `attendance.repository.ts`). **The only package allowed to import `db` and run queries.** | PB, LALW, and LAG if it ever needs DB access. |
 | `http` | `ApiSuccessResponse`/`ApiErrorResponse`, error classes, `asyncHandler`, Zod validation middleware, generic error-handling middleware. | PB, LAG, LALW's local health-check shell. |
-| `logger` | Winston logger instance factory (`createLogger({ service })`). | All apps, via a thin per-app wrapper. |
+| `logger` | Winston logger instance factory (`createLogger({ service })`). No tracing dependency/code - trace-log correlation happens via auto-instrumentation instead, see "Distributed tracing" below. | All apps, via a thin per-app wrapper. |
 | `types` | Cross-service contracts: PB<->LAG, LAG<->LALW SQS payload shape, LALW<->PB webhook payload, FT<->PB API shapes. | All apps. |
-| `permissions` | Permission-identifier constants + `P_O`/`P_B`/`P_C` types. | PB (RBAC checks), FT (conditional UI). |
+| `permissions` | RBAC-specific vocabulary only: `PERMISSION_SCOPE` (general/batch/course/org, i.e. `P_O`/`P_B`/`P_C`) and `USER_ROLE` (super_admin/admin/faculty/student). | PB (RBAC checks), FT (conditional UI), `db` (column typing). |
+| `enums` | Non-permission `application_level_enum` vocabularies from table-structure.txt: `COURSE_TYPE`, `ATTENDANCE_STATUS`, `ATTENDANCE_REMARK`, `WEBHOOK_STATUS`. Kept separate from `permissions` so that package stays RBAC-only. | `db` (column typing), and any app/service that writes/reads these columns (PB, LALW). |
 | `uai` | UAI-generation logic (ua-parser-js based: `browser.name + os.name + device.vendor + device.model + device.type + cpu.architecture`). **Must produce identical output on FT (client) and PB/LAG (server verification)** - any drift silently breaks login. | FT, PB, LAG. |
 | `crypto` | Asymmetric sign/verify helpers. PB signs, LAG verifies - sharing the implementation keeps algorithm/padding choices in sync. | PB, LAG. |
+| `tracing` | OpenTelemetry bootstrap (`initTracing`), manual span helper (`withSpan`), trace-context propagation helpers for the future SQS boundary. See "Distributed tracing" below. | `dal` (manual DB spans), every app's dedicated entrypoint. Not `logger` - that package has no tracing dependency at all. |
 | `tsconfig`, `eslint-config` | Shared compiler/lint config. | All apps. |
+
+### Application-level enum columns
+
+table-structure.txt deliberately keeps `type`/`role`/`status`/`remark`-style
+columns as plain `varchar`, not real Postgres enums (see each column's
+`// application_level_enum(...)` comment) - the DB enforces nothing. To still
+get compile-time safety, every such column uses Drizzle's `.$type<T>()`
+against the canonical union type from `@platform/permissions` or
+`@platform/enums` (whichever owns that vocabulary), e.g.:
+```ts
+type: varchar("type", { length: 25 }).$type<PermissionScope>().notNull(),
+```
+`.$type<T>()` is compile-time only - it does not change the generated SQL
+(verified: regenerating the migration with vs. without it produces identical
+DDL) and does not add a runtime check. Never redeclare the same string
+literals locally in `packages/db` or anywhere else - always import the type
+from whichever package owns that vocabulary, so there is exactly one source
+of truth per enum.
+
+### DB connection pooling - PB only
+
+`@platform/db`'s `createDbClient(databaseUrl, options?)` and
+`@platform/dal`'s `initDal(databaseUrl, options?)` take an optional
+`DbClientOptions` (`{ max?, idleTimeoutSeconds?, connectTimeoutSeconds? }`).
+**Default `max` is 1** (no real pooling) - this is deliberate and must stay
+the default: LALW's production Lambda handler is a per-invocation runtime,
+where each concurrent invocation is a separate process, so a wide pool per
+invocation would multiply connections against Postgres's connection limit
+instead of reusing them. Only **PB** - a genuinely long-running server that
+benefits from reusing connections across concurrent requests - opts into a
+real pool, via a hardcoded `DB_POOL_MAX = 10` constant in `server.ts` passed
+to `initDal` - not an env var, since this is a deployment-topology constant
+(tied to PB always being one long-running process), not something that
+varies per environment. When LALW is built, call `initDal(databaseUrl)` with
+no options (or explicit `{ max: 1 }`) - do not give it a pool.
+
+### Soft-deleted rows (`is_deleted`) are excluded by default in `packages/dal`
+
+Every table with `is_deleted` (organizations, users, batches, courses,
+course_sessions, ...) means "deleted = doesn't exist" for normal callers.
+Every `packages/dal` repository function - reads and writes alike - filters
+`eq(<table>.isDeleted, false)` by default; this is enforced in the DAL
+specifically so no app/service has to remember it per call. A feature that
+genuinely needs to see deleted rows (an admin restore/audit view) must get
+its own explicitly-named function (e.g. `findUserByIdIncludingDeleted`) -
+never make that the default. `is_archived` is a different, unrelated concept
+(still active/visible, just not "current") and does not get this treatment.
+
+### Distributed tracing (`@platform/tracing`)
+
+OpenTelemetry, wired for real (not just installed). Every HTTP-serving app
+calls `initTracing({ service })` once at process start, from a **dedicated
+entrypoint file, not the app's normal module graph**:
+
+```
+platform/apps/platform-backend/
+  src/
+    instrumentation.ts   - the real entrypoint (see package.json dev/build/start).
+                            Calls initTracing() first, then a genuinely
+                            deferred `void import("./server")`.
+    server.ts               - unchanged otherwise: load env, init DB
+                               connection, create express app, start server
+```
+
+**Why a separate entrypoint, and why a dynamic `import()` instead of a
+static one:** OpenTelemetry's Node auto-instrumentation (`@opentelemetry/
+auto-instrumentations-node`, covering `express`/`http` here) works by
+patching `require()`/module-loading itself. If `express` (or anything else
+it instruments) is already `require()`'d before `initTracing()` runs,
+instrumenting it afterward is a **silent no-op** - no error, spans just
+never appear. A static `import "./server"` gets hoisted by TypeScript/
+bundlers above any runtime code in the same file, so it cannot be used to
+sequence this correctly - only a genuinely deferred call (dynamic
+`import()`, or a plain `require()` call written as a statement) guarantees
+`initTracing()` really runs first. Verified empirically: a `GET /health`
+request produces one full trace (top-level `GET /health` HTTP span, every
+Express middleware as a child span, the route handler span) all under one
+`traceId`.
+
+**Exporter**: OTLP over HTTP, via `OTEL_EXPORTER_OTLP_ENDPOINT` (optional
+env var). Unset falls back to a `ConsoleSpanExporter` (prints spans to
+stdout) - this was a deliberate choice so tracing works with zero new infra
+today; point the env var at any OTLP-compatible backend later (self-hosted
+Jaeger/Tempo, Honeycomb, Grafana Cloud, Datadog, ...) with no code change.
+No backend has been chosen yet - see "Still open".
+
+**DB spans are manual, not auto-instrumented**: `@opentelemetry/
+instrumentation-pg` exists for the `pg` driver, but we use `postgres`
+(porsager) - there is no official (or found community) auto-instrumentation
+package for it, and drizzle-orm 0.33 ships no OTel integration either. So
+`@platform/dal` wraps every repository function in `withSpan("db.<table>.
+<fnName>", ..., { "db.system": "postgresql", "db.sql.table": "<table>" })`
+instead - a plain `export async function xxx() { return withSpan(...) }`
+per function, hand-typed span-name string. **Tried and deliberately
+rejected**: a `tracedQuery(table, fn)` higher-order wrapper that derived the
+span name from the wrapped function's own `.name` (via a named function
+expression) instead of a hand-typed string. It failed `.d.ts` generation
+(TS2742 - a generic function call assigned to a `const` can't be named
+portably) unless every export got an explicit type annotation duplicating
+the function's signature a second time - net *more* repetition than the
+"span name could drift from the function name" problem it solved. If the DB
+driver ever changes to `pg`, revisit whether auto-instrumentation should
+replace manual spans entirely instead.
+
+`withSpan()` does not set `SpanStatusCode.OK` on success - only on error
+(catch block). Per OTel convention, successful spans stay UNSET; `OK` is for
+deliberately overriding what would otherwise look like an error.
+
+**Auto-instrumentation is scoped down, not left at the default**:
+`getNodeAutoInstrumentations()` loads 39 instrumentation packages by default
+(mongodb, redis, graphql, grpc, kafka, mysql, oracledb, hapi, koa,
+socket.io, `pg` [wrong driver for us], ...) - real cost in startup time and
+bundle size, worst for LALW's future Lambda cold start. `initTracing()`
+explicitly disables the ~33 we don't use; only `http`, `express`, `winston`,
+`aws-sdk`, `aws-lambda` (LALW), and `undici` (future outbound fetch, e.g.
+webhook dispatch) stay on. Verified: exactly 6 active instrumentations at
+runtime.
+
+**`spanProcessorMode`**: `initTracing()` takes an optional `"batch"`
+(default) | `"simple"` option. Batch processors buffer spans and flush on a
+timer - fine for PB (long-running). Lambda execution environments freeze
+between invocations, so a timer-based flush may just never fire and spans
+get silently dropped - LALW's `lambda/handler.ts` must use `"simple"`
+(synchronous, flushes every span as it ends) when built.
+
+**Log-trace correlation is NOT custom code** - `@platform/logger` does
+nothing tracing-related itself. `@opentelemetry/instrumentation-winston`
+(one of the 6 kept auto-instrumentations above) already patches winston to
+inject `trace_id`/`span_id`/`trace_flags` into every log call made inside an
+active span, with zero code on our side. Verified empirically (and verified
+the *wrong* way once first - by requiring `winston` before `initTracing()`
+in a throwaway test script, which silently produced no injection; the fix
+was fixing the test's require order, not the implementation). This only
+works because `@platform/logger` is only ever loaded transitively from an
+app's dedicated `instrumentation.ts`, after `initTracing()` already ran.
+
+**SQS trace propagation (LAG -> SQS -> LALW) - designed, not wired up yet**:
+`@platform/tracing` exports `injectTraceContext(carrier)` /
+`extractTraceContext(carrier)` (thin wrappers over `@opentelemetry/api`'s
+`propagation.inject`/`extract`, W3C tracecontext format) specifically so
+that when LAG and LALW are built, LAG can inject trace context into the SQS
+message's attributes and LALW can extract it and run its processing inside
+that context - so the whole LAG -> SQS -> LALW -> PB webhook flow shows up
+as one trace instead of three disconnected ones. Neither app exists yet, so
+this is unverified; when built, both must call `initTracing()` from their
+own dedicated entrypoint the same way PB does (LALW's `lambda/handler.ts`
+in particular - Lambda's execution model makes the auto-instrumentation
+init-order rule just as important there).
 
 ### Hard rule: no app talks to the database directly
 
@@ -88,6 +258,9 @@ platform/apps/platform-backend/
     app.ts                  - register middlewares + routers, no listen()
     server.ts                 - load env, init DB connection (via @platform/dal),
                                  create express app, start server
+    instrumentation.ts           - the REAL entrypoint (dev/build/start all
+                                    point here, never server.ts directly) -
+                                    see "Distributed tracing" above for why
 ```
 
 Routes stay pure path + middleware wiring. Controllers handle req/res
@@ -163,7 +336,11 @@ directly, same as PB.
 - Health check endpoint: `/health` on every HTTP-serving app.
 - Logging: Winston via `@platform/logger`, never `console.log` directly.
   Log entry/exit of controllers, services, and DAL calls, plus all
-  exceptions/errors.
+  exceptions/errors. Every log call gets `trace_id`/`span_id` stamped in
+  automatically when inside an active span - see "Distributed tracing".
+- Tracing: `@platform/tracing`'s `initTracing()` from a dedicated
+  entrypoint file (never the app's normal module graph) - see "Distributed
+  tracing" above, the init-order rule there is not optional.
 - `.env`: one file shared across dev/prod, distinguished via an identifier
   inside it - not separate `.env.development`/`.env.production` files.
 - No mandatory test suite requirement yet, but code must stay structured so
@@ -178,5 +355,13 @@ directly, same as PB.
 - Testing strategy (beyond "keep it testable").
 - CI setup.
 - Local dev docker-compose (Postgres, LocalStack, etc.) - not yet built.
+  Could also host a local OTel collector/Jaeger/Tempo when tracing needs one.
 - PB's `constants/` contents and `middlewares/` specifics beyond the RBAC
   permission check.
+- Trace backend: no OTLP endpoint has been chosen/stood up yet (self-hosted
+  collector vs. a SaaS vendor) - traces currently only go to stdout via the
+  console exporter fallback.
+- Wiring `initTracing()` + SQS trace-context propagation into LAG/LALW once
+  those apps are built (see "Distributed tracing" above).
+- Sampling strategy: currently always-on (SDK default), fine at current
+  traffic - revisit if/when trace volume becomes a cost concern.

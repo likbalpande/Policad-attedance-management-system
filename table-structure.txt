@@ -1,4 +1,4 @@
-access_identifiers
+admin_access_identifiers
     id INT AUTO_INCREMENT PRIMARY KEY,
     identifier VARCHAR(50) NOT NULL,
     description VARCHAR(50) NOT NULL,
@@ -6,11 +6,11 @@ access_identifiers
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
 
-    CONSTRAINT uq__access_identifiers__identifier__type
+    CONSTRAINT uq__admin_access_identifiers__identifier__type
         UNIQUE (identifier, type),
-    CONSTRAINT uq__access_identifiers__id__type
+    CONSTRAINT uq__admin_access_identifiers__id__type
         UNIQUE (id, type)
-    // NOT REQUIRED - Compound index works LEFT-TO-RIGHT - CREATE INDEX idx__access_identifiers__identifier ON access_identifiers (identifier);
+    // NOT REQUIRED - Compound index works LEFT-TO-RIGHT - CREATE INDEX idx__admin_access_identifiers__identifier ON admin_access_identifiers (identifier);
 
 admin_permissions_config_groups
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -35,7 +35,7 @@ admin_permitted_access_identifiers
     CONSTRAINT fk__admin_permitted_access_identifiers__permission_config_group_id__type
         FOREIGN KEY (permission_config_group_id, type) REFERENCES admin_permissions_config_groups(id, type),
     CONSTRAINT fk__admin_permitted_access_identifiers__access_identifier_id__type
-        FOREIGN KEY (access_identifier_id, type) REFERENCES access_identifiers(id, type),
+        FOREIGN KEY (access_identifier_id, type) REFERENCES admin_access_identifiers(id, type),
 
     CONSTRAINT uq__admin_permitted_access_identifiers__permission_config_group_id__access_identifier_id
         UNIQUE (permission_config_group_id, access_identifier_id)
@@ -45,7 +45,7 @@ organizations
     name VARCHAR(100) NOT NULL,
     logo_url TEXT,
     webhook_url TEXT,
-    live_attendance_trigger BOOLEAN DEFAULT FALSE NOT NULL,
+    has_live_attendance_trigger BOOLEAN DEFAULT FALSE NOT NULL,
     is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -74,10 +74,10 @@ users
     role VARCHAR(25) NOT NULL, // application_level_enum(super_admin, admin, faculty, student)
     password VARCHAR(50), // stored in plain text (intentional)
     password_generated_at TIMESTAMPTZ NOT NULL,
-    password_version INT DEFAULT 0 NOT NULL,
     otp VARCHAR(10),
     otp_generated_at TIMESTAMPTZ,
     login_count INT DEFAULT 0 NOT NULL,
+    last_login_at TIMESTAMPTZ, // set on every successful login (all roles) - drives the concurrent-session check for students, see product-idea.txt
     allow_password_login BOOLEAN DEFAULT FALSE NOT NULL,
     alias TEXT,
     created_by_user_id INT,
@@ -107,13 +107,14 @@ user_permissions
     user_id INT NOT NULL,
     admin_permissions_config_group_id INT NOT NULL,
     resource_id INT, // batch_id / course_id / org_id / null
+    resource_type VARCHAR(25) NOT NULL, // application_level_enum(general, batch, course, org) - denormalized, must match config group's type
     assigned_by_user_id INT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
 
     CONSTRAINT fk__user_permissions__user_id
         FOREIGN KEY (user_id) REFERENCES users(id),
-    CONSTRAINT fk__user_permissions__admin_permissions_config_group_id
-        FOREIGN KEY (admin_permissions_config_group_id) REFERENCES admin_permissions_config_groups(id),
+    CONSTRAINT fk__user_permissions__admin_permissions_config_group_id__resource_type
+        FOREIGN KEY (admin_permissions_config_group_id, resource_type) REFERENCES admin_permissions_config_groups(id, type),
     CONSTRAINT fk__user_permissions__assigned_by_user_id
         FOREIGN KEY (assigned_by_user_id) REFERENCES users(id)
 
@@ -189,21 +190,21 @@ courses
 course_batch
     id INT AUTO_INCREMENT PRIMARY KEY,
     course_id INT NOT NULL,
-    user_id INT NOT NULL,
+    batch_id INT NOT NULL,
     assigned_by_user_id INT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
 
     CONSTRAINT fk__course_batch__course_id
         FOREIGN KEY (course_id) REFERENCES courses(id),
-    CONSTRAINT fk__course_batch__user_id
-        FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk__course_batch__batch_id
+        FOREIGN KEY (batch_id) REFERENCES batches(id),
     CONSTRAINT fk__course_batch__assigned_by_user_id
         FOREIGN KEY (assigned_by_user_id) REFERENCES users(id),
 
-    CONSTRAINT uq__course_batch__course_id__user_id
-        UNIQUE NULLS NOT DISTINCT (course_id, user_id),
+    CONSTRAINT uq__course_batch__course_id__batch_id
+        UNIQUE NULLS NOT DISTINCT (course_id, batch_id),
 
-    CREATE INDEX idx__course_batch__user_id ON course_batch(user_id)
+    CREATE INDEX idx__course_batch__batch_id ON course_batch(batch_id)
 
 course_sessions
     id INT AUTO_INCREMENT PRIMARY KEY,

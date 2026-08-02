@@ -8,7 +8,7 @@ All items below were discussed and fixes were applied to both files.
 
 1. P_E (Event Access Permissions) dropped entirely.
    - Reason: events are just `courses` rows with type = 'event', not a separate entity.
-     access_identifiers.type / admin_permissions_config_groups.type never supported
+     admin_access_identifiers.type / admin_permissions_config_groups.type never supported
      an "event" enum value, so P_E was unimplementable as originally written.
    - Fix: all P_E references in product-idea.txt now read P_C. Permission list
      (P_O, P_B, P_C) updated accordingly. Stray "P_D" typo on the same line removed.
@@ -45,7 +45,7 @@ All items below were discussed and fixes were applied to both files.
    - users.alisa -> users.alias
    - batch_tag table renamed to batch_tags (fixes a dangling FK - batch_tag_map
      already referenced "batch_tags", table itself was singular)
-   - organizations.live_attendance_trigger - added missing BOOLEAN type
+   - organizations.has_live_attendance_trigger - added missing BOOLEAN type
    - users.allow_password_login - added missing BOOLEAN type (same class of bug,
      caught while applying fix #10)
    - webhook_history - added the missing updated_at column (indexes referenced it
@@ -83,7 +83,7 @@ All items below were discussed and fixes were applied to both files.
 17. Added a DB-level type-consistency constraint for
     admin_permitted_access_identifiers: denormalized `type` column + composite
     FKs (permission_config_group_id, type) -> admin_permissions_config_groups
-    (id, type) and (access_identifier_id, type) -> access_identifiers(id, type).
+    (id, type) and (access_identifier_id, type) -> admin_access_identifiers(id, type).
     Both parent tables got a UNIQUE(id, type) constraint to support this.
     Guarantees a config group and its linked access identifiers can never have
     mismatched types, enforced by Postgres itself (no app-layer check needed).
@@ -273,10 +273,321 @@ summary file is a point-in-time discussion log, the skill is what actually
 gets loaded and followed during implementation.
 
 
+PART 4: PB implementation - super-admin feature slice (started while encoding
+packages/db from table-structure.txt)
+--------------------------------------------------------------------------------------------
+1. product-idea.txt line 20 - "FTSA can assign an admin to organization
+   (many-to-many)" contradicted users.org_id (single NOT NULL FK). Resolved:
+   one org per admin, schema wins. Reworded to "FTSA can assign an admin to
+   an organization (one org per admin, via users.org_id - not many-to-many)."
+
+2. table-structure.txt bug found while writing the Drizzle schema:
+   course_batch's second column was `user_id INT NOT NULL REFERENCES
+   users(id)` despite the table name and product-idea's "FTA can add batch
+   to course" - it should map course_id <-> batch_id, matching the
+   batch_tag_map/course_tag_map sibling pattern (faculty-to-course
+   assignment is already covered separately by user_permissions with
+   resource_id = course_id). Fixed: column renamed to batch_id, FK now
+   references batches(id), constraint/index names updated
+   (fk__course_batch__batch_id, uq__course_batch__course_id__batch_id,
+   idx__course_batch__batch_id).
+
+3. Refresh token transport: response body (not an httpOnly cookie) - FT
+   decides where to persist it (localStorage/Capacitor Preferences).
+
+4. OTP delivery: console-log stub for now via a sendOtpEmail(email, otp)
+   function in PB's utils/ - swap in a real provider (Resend/SES/SMTP) later
+   behind the same signature, no login-flow changes needed.
+
+5. Refresh token TTL clarified: staff (super_admin/admin/faculty) = 7 days,
+   matching product-idea.txt as already written. Student refresh TTL
+   (separate, student login not built yet) changed from 30 to 31 days -
+   product-idea.txt's student section updated to say "within 31 days."
+
+6. Monorepo bootstrapped end-to-end and typechecked/built/lint-passed:
+   - platform/ is the pnpm workspace root (pnpm-workspace.yaml + package.json).
+   - packages/tsconfig, packages/eslint-config - shared base config.
+   - packages/db - full Drizzle schema (all 19 tables from table-structure.txt,
+     including the course_batch fix), Drizzle client factory, drizzle-kit
+     config. KNOWN ISSUE documented in src/schema/custom-types.ts: drizzle-kit
+     0.24.2 mis-quotes the geography(Point, 4326) custom type as an identifier
+     in generated migration SQL - fix by hand after every db:generate run
+     touching attendances/attendance_history (not blocking, location/geofencing
+     is still just a TODO per product-idea.txt).
+   - packages/dal - initDal/getDb/closeDal singleton + users.repository.ts,
+     organizations.repository.ts (enough for auth + org creation).
+   - packages/http - ApiSuccessResponse/ApiErrorResponse, AppError + typed
+     subclasses, asyncHandler, Zod validate() middleware, errorHandler.
+   - packages/logger - Winston createLogger({ service }) factory.
+   - packages/permissions - PERMISSION_SCOPE (mirrors admin_access_identifiers.type
+     / P_O/P_B/P_C/general) and USER_ROLE enums.
+   - packages/types - StaffAccessTokenPayload / StudentAccessTokenPayload /
+     AccessTokenPayload JWT payload shapes.
+   - packages/uai - generateUai() via ua-parser-js, delimiter-joined.
+   - packages/crypto - signData/verifySignature (RSA-SHA256) for the
+     UAI-derived "origin" field (private/public key 2).
+   - apps/platform-backend - full skeleton (app.ts, server.ts,
+     config/env.config.ts with Zod-validated env incl. PEM key loading,
+     logger/ wrapper, middlewares/not-found.middleware.ts, /health endpoint)
+     plus the first real feature: app/auth/ (request-otp, login, refresh -
+     students explicitly rejected from this endpoint per product-idea.txt).
+
+7. Verification performed: full `pnpm -r build`/`typecheck`/`lint` clean;
+   `drizzle-kit generate` produced valid SQL for all 19 tables (composite
+   FKs, UNIQUE NULLS NOT DISTINCT, partial + BRIN indexes all confirmed
+   working, modulo the geography quoting issue above); PB server smoke-
+   tested against a real local Postgres (organizations + users tables) -
+   otp/request -> login (OTP path and password-fallback path) -> refresh
+   all verified end to end, including reused-OTP rejection, wrong-code
+   rejection, student rejection, validation errors, and refresh invalidation
+   when login_count has moved on from a newer login.
+
+PART 5: Build tooling switch + application-level enum typing
+-----------------------------------------------------------------
+1. Build tooling: switched every package/app's `build` script from `tsc -p
+   tsconfig.json` to `tsup` (esbuild-based, much faster) with a `prebuild`
+   script running `tsc --noEmit` first, so type errors still block the build
+   even though esbuild itself doesn't type-check. Required adding
+   platform/.npmrc with `enable-pre-post-scripts=true` - pnpm does not run
+   `prebuild` automatically otherwise (verified this empirically before
+   relying on it). Packages build with --dts (consumed as libraries); PB's
+   app build (`tsup src/server.ts ...`) doesn't need --dts (it's an
+   executable). dev scripts (tsx watch) unaffected.
+
+2. Application-level enum columns now use Drizzle's `.$type<T>()` instead of
+   plain untyped varchar, so table-structure.txt's `// application_level_enum
+   (...)` columns get compile-time safety without becoming real Postgres
+   enums (deliberately not DB-enforced, per PART 1 item 17's reasoning
+   applied consistently). New package @platform/enums created to hold the
+   non-permission vocabularies (COURSE_TYPE, ATTENDANCE_STATUS,
+   ATTENDANCE_REMARK, WEBHOOK_STATUS) - kept separate from @platform/
+   permissions (which stays RBAC-only: PERMISSION_SCOPE, USER_ROLE) since
+   course type / attendance status aren't permission concepts. packages/db
+   now depends on both permissions and enums purely for these type
+   annotations - confirmed via a regenerated migration that this has zero
+   effect on generated SQL (identical DDL with vs. without). Columns updated:
+   admin_access_identifiers.type, admin_permissions_config_groups.type,
+   admin_permitted_access_identifiers.type, users.role, courses.type,
+   attendances.status/remark, attendance_history.status/remark,
+   webhook_history.status.
+   Side effect: this let us delete the `as "super_admin" | "admin" |
+   "faculty"` casts in PB's auth.login.service.ts / auth.refresh.service.ts.
+   Removing the cast in auth.refresh.service.ts surfaced a real gap - unlike
+   login(), refresh() never explicitly rejected role === student, so the
+   stricter type didn't compile until that check was added. Fixed as
+   defense in depth (refresh() now throws before issuing a token for a
+   student role, matching login()'s guard).
+
+PART 6: DB connection pooling - PB only
+-----------------------------------------
+@platform/db's createDbClient and @platform/dal's initDal now take an
+optional DbClientOptions ({ max?, idleTimeoutSeconds?, connectTimeoutSeconds? }).
+Default max is 1 (no real pooling) - deliberate default, not just an
+oversight: LALW's production Lambda handler is per-invocation (each
+concurrent invocation is a separate process), so a wide pool per invocation
+would multiply connections against Postgres's connection limit rather than
+reuse them. Only PB - a genuinely long-running server - opts into a real
+pool, via a new DB_POOL_MAX env var (default 10) passed to initDal in
+server.ts. When LALW is built later, it must call initDal with no options
+(or explicit { max: 1 }), never a pool. Also backfilled .env.example, which
+had gone stale (was missing the JWT/origin PEM key vars from PART 4).
+
+PART 7: is_deleted filtering convention in packages/dal
+-----------------------------------------------------------
+Found an inconsistency: organizations.repository.ts's listOrganizations
+filtered is_deleted=false but findOrganizationById/findOrganizationByName
+did not; users.repository.ts filtered nowhere at all, meaning a soft-deleted
+(deactivated) admin/faculty could still log in and refresh tokens via
+auth.login.service.ts / auth.refresh.service.ts. Fixed: every function in
+both repositories (reads and writes) now filters eq(<table>.isDeleted,
+false) by default - "deleted" means "doesn't exist" for every normal
+caller, enforced centrally in the DAL rather than left to every service to
+remember. A future admin-restore/audit feature needing deleted rows should
+get its own explicitly-named function, not change this default. is_archived
+is a separate concept (still active/visible) and was deliberately left
+alone - nothing in the spec defines archived-filtering behavior yet.
+
+PART 8: OpenTelemetry / distributed tracing
+-----------------------------------------------
+New @platform/tracing package: initTracing({service, otlpEndpoint?}) (OTel
+Node SDK bootstrap, OTLP exporter with a ConsoleSpanExporter fallback when
+no endpoint is configured - deliberate, so tracing works with zero new infra
+today and swaps to any OTLP-compatible backend later via one env var, no
+code change), withSpan() (manual span helper), injectTraceContext()/
+extractTraceContext() (W3C tracecontext propagation primitives, for the
+future SQS boundary).
+
+Key technical finding: OTel's Node auto-instrumentation patches modules at
+require()-time, so express/http must not be required anywhere before
+initTracing() runs, or instrumentation is a silent no-op (no error, spans
+just never appear). A static `import` gets hoisted above runtime code by
+TS/bundlers, so PB's entrypoint was restructured: new src/instrumentation.ts
+(calls initTracing() then `void import("./server")` - a genuinely deferred
+dynamic import) is now the real entrypoint everywhere (package.json
+dev/build/start), src/server.ts unchanged otherwise. Verified empirically:
+a GET /health request produces one full trace (HTTP span + every Express
+middleware as a child span + route handler span, all one traceId).
+
+Second finding: the `postgres` driver we use (not `pg`) has no official
+OpenTelemetry auto-instrumentation package, and drizzle-orm 0.33 has no
+built-in OTel integration either. So @platform/dal wraps every repository
+function in withSpan() manually instead (db.<table>.<fnName> span names,
+db.system/db.sql.table attributes) - verified working via a standalone
+script (span appears in console output with correct attributes).
+
+@platform/logger now stamps trace_id/span_id onto every log entry when
+called from inside an active span (reads @opentelemetry/api's active
+context via @platform/tracing's getActiveTraceContext()) - verified: a log
+call inside withSpan() gets both fields, a log call outside any span gets
+neither.
+[SUPERSEDED by PART 9 item 1 - this custom injection was deleted in favor of
+@opentelemetry/instrumentation-winston doing it automatically. getActiveTraceContext()
+itself outlived that as unused dead code until PART 10's cleanup removed it too.]
+
+Not done yet (LAG/LALW don't exist as code): wiring initTracing() +
+injectTraceContext()/extractTraceContext() into LAG and LALW so the
+LAG -> SQS -> LALW -> PB webhook flow becomes one trace instead of three
+disconnected ones. The primitives exist in @platform/tracing now so this is
+ready when those apps get built - both must use the same dedicated-
+entrypoint pattern as PB (LALW's lambda/handler.ts especially, since
+Lambda's execution model makes the init-order rule just as important there).
+Also not decided: which OTLP backend to actually point at (self-hosted
+collector/Jaeger/Tempo vs. a SaaS vendor) - not blocking, console exporter
+works fine for now.
+
+PART 9: OpenTelemetry refinements (asked "is there a more elegant way")
+-----------------------------------------------------------------------------
+Reviewed PART 8's implementation for genuine improvements rather than just
+defending it. Four applied, one tried and reverted:
+
+1. Deleted @platform/logger's custom trace_id/span_id injection code
+   entirely. Verified (the hard way - got a false negative first by
+   requiring winston before initTracing() in a throwaway test, same
+   require-order mistake the whole init-order rule warns about) that
+   @opentelemetry/instrumentation-winston, already loaded via
+   getNodeAutoInstrumentations(), does the exact same trace-context
+   injection automatically with zero code on our side. @platform/logger no
+   longer depends on @platform/tracing at all.
+
+2. getNodeAutoInstrumentations() was loading 39 instrumentation packages
+   unconditionally (mongodb, redis, graphql, grpc, kafka, mysql, oracledb,
+   hapi, koa, socket.io, pg [wrong driver - we use `postgres`], ...) -
+   real startup/bundle cost, worst for LALW's future Lambda cold start.
+   Explicitly disabled the ~33 we'll never use; kept http, express, winston,
+   aws-sdk, aws-lambda (LALW), undici (future outbound fetch e.g. webhook
+   dispatch). Verified exactly 6 active instrumentations at runtime.
+
+3. Added spanProcessorMode: "batch" (default) | "simple" to initTracing().
+   BatchSpanProcessor (the SDK default) is a known bad fit for Lambda -
+   execution environments freeze between invocations, so a timer-based
+   flush may never fire and spans get silently dropped. LALW must use
+   "simple" when built. Not urgent (LALW doesn't exist) but cheap to design
+   in now rather than redo later.
+
+4. withSpan() no longer sets SpanStatusCode.OK on success - only on error.
+   Matches OTel convention (successful spans stay UNSET; OK is for
+   deliberately overriding what would otherwise look like an error).
+
+5. TRIED AND REVERTED: a tracedQuery(table, fn) higher-order wrapper meant
+   to derive each DB span's name from the wrapped function's own .name
+   (via a named function expression) instead of a hand-typed span-name
+   string, to remove the (minor) risk of the string drifting from the
+   function name. Implemented it, then hit tsup's TS2742 (.d.ts can't
+   portably name a type inferred through a generic function call assigned
+   to a const) - fixing it required an explicit type annotation on every
+   export, duplicating each function's signature a second time. Net more
+   repetition than the problem it solved, so reverted to the plain
+   `export async function xxx() { return withSpan("db.users.xxx", ...) }`
+   pattern from PART 8. Worth remembering if this idea resurfaces - it
+   looks appealing but isn't actually a win once you hit the dts-generation
+   wall.
+
+All changes rebuilt/lint-checked across the whole workspace and
+re-verified end to end (same /health full-trace test as PART 8, plus a
+fresh log-correlation check using the trimmed @platform/logger).
+
+PART 10 - Refresh token rotation + dropped passwordVersion in favor of loginCount
+   1. REFRESH TOKEN ROTATION: refresh() previously only reissued the access
+      token; the refresh token kept its original absolute TTL from login, so
+      even an actively-used session got hard-logged-out once that TTL
+      elapsed. Fixed: refresh() now returns a freshly-issued refresh token
+      too (same payload, new TTL) on every call - a sliding window. Inactive
+      sessions still expire after TTL of no activity; active ones don't.
+   2. DROPPED passwordVersion, students now use loginCount (same field/check
+      as staff). Reasoning, in order of the actual discussion:
+      - Original ask: "isn't passwordVersion the same as loginCount?" No -
+        loginCount bumps on every login (kills prior sessions, single active
+        session model); passwordVersion only bumped on password change
+        (allowed concurrent sessions across a password's lifetime).
+      - Real requirement surfaced: students must NOT have concurrent
+        sessions at all (anti account-sharing for attendance marking) - so
+        the "allow concurrent sessions" behavior of passwordVersion was
+        actually wrong for students, not just differently named.
+      - passwordVersion's real value was the per-request users_on_alert_map
+        design (product-idea.txt, pre-edit) - near-real-time revocation on
+        password reset, cheap because password resets are rare/independent
+        of whether a user currently holds a live token, so the map stayed
+        small.
+      - Considered reusing that same alert-map idea keyed by "recently
+        logged in" for the new concurrent-session check - rejected: holding
+        any live token already implies a recent login (that's the only way
+        to get one), so "recently logged in" would match ~100% of active
+        users on any given day. Not a filter at all, just a slower way to
+        check everyone.
+      - Refined to keying the map by CONCURRENT login detection instead:
+        added users.last_login_at (all roles). On login, if the previous
+        last_login_at is still within the access-token TTL window, a prior
+        session could still be alive - genuinely rare (one login/day is
+        normal), so a map of just these entries stays small and actually
+        targets the sharing scenario, unlike a raw recency map.
+      - Scope decision: build the PB-side data (last_login_at column,
+        loginCount bump + lastLoginAt stamp in incrementLoginCount, password
+        reset also bumps loginCount atomically via SQL) now. The actual
+        per-request alert-map ENFORCEMENT has to live on the
+        attendance-marking path (LAG), which doesn't exist as code yet -
+        left as documented future work, not half-built today. Until LAG
+        enforcement exists, a concurrent student session is only caught at
+        the stale session's next refresh (bounded by student access token
+        TTL, 1 day per spec) - not instant.
+   3. Changes: users.password_version column dropped, users.last_login_at
+      added (nullable, timestamptz). StudentAccessTokenPayload.passwordVersion
+      -> loginCount (packages/types). updateUserPassword DAL fn dropped its
+      passwordVersion param, now atomically increments loginCount via
+      drizzle's sql`` template (no read-then-write - straightforward single
+      UPDATE, no race to introduce). incrementLoginCount DAL fn now also
+      stamps lastLoginAt = now() on every call (used by both staff and,
+      later, student login). Migration 0000 regenerated in place (still the
+      only migration, same day, no deployed data) - same geography(Point,
+      4326) quoting bug hit again, same manual fix applied. product-idea.txt
+      and table-structure.txt updated to match; the old users_on_alert_map
+      paragraph rewritten to describe the concurrent-login design and
+      explicitly flag the LAG-side enforcement as future work.
+   4. Deleted @platform/tracing's getActiveTraceContext() - dead code, zero
+      callers anywhere. It survived PART 9 item 1 (which deleted the
+      logger-side code that used to call it) as an orphaned primitive with a
+      now-inaccurate doc comment still claiming @platform/logger used it.
+      injectTraceContext()/extractTraceContext() in the same file were left
+      alone - unused too, but have a real documented future consumer
+      (LAG/LALW SQS propagation), unlike this one.
+
 Still open / not yet discussed:
    - FT's internal folder structure.
    - Testing strategy.
    - CI setup.
    - Local dev docker-compose (Postgres, LocalStack, etc.) - not yet built.
-   - PB's constants/ contents, middlewares/ specifics beyond RBAC, and
-     config/env.config.ts conventions in detail.
+     Could also host a local OTel collector/Jaeger/Tempo when tracing needs one.
+   - Trace backend: no OTLP endpoint chosen/stood up yet - see PART 8.
+   - RBAC/permission-check middleware itself (PB's middlewares/ has only the
+     404 handler so far) - blocked on the permissions-config feature
+     (admin_permissions_config_groups / admin_access_identifiers / P_O/P_B/P_C
+     assignment) not being built yet.
+   - Public-key-sharing endpoint (PB serving public keys 1 & 2 to LAG via
+     service-communication-secret) - not needed yet, only LAG will need it.
+   - Next super-admin features per product-idea.txt: create organization,
+     create admin (+ which module owns it), assign admin to org.
+   - PB's constants/ contents and config/env.config.ts conventions beyond
+     what auth already needed.
+   - Student login/refresh flow itself (PB) - only the DAL/schema groundwork
+     (loginCount, lastLoginAt) exists so far, see PART 10.
+   - LAG-side per-request concurrent-session enforcement (the alert-map
+     replacement) - LAG doesn't exist as code yet, see PART 10.

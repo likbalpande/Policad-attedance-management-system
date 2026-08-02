@@ -1,0 +1,33 @@
+import { pgTable, serial, varchar, text, integer, boolean, unique } from "drizzle-orm/pg-core";
+import type { CourseType } from "@platform/enums";
+import { organizations } from "./organizations";
+import { users } from "./users";
+import { timestamps } from "./timestamps";
+
+export const courses = pgTable(
+  "courses",
+  {
+    id: serial("id").primaryKey(),
+    title: varchar("title", { length: 50 }).notNull(),
+    alias: text("alias"),
+    orgId: integer("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    createdByUserId: integer("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    // application_level_enum(regular, event)
+    type: varchar("type", { length: 25 }).$type<CourseType>().notNull(),
+    isArchived: boolean("is_archived").default(false).notNull(),
+    isDeleted: boolean("is_deleted").default(false).notNull(),
+    ...timestamps(),
+  },
+  (table) => ({
+    uqTitleOrg: unique("uq__courses__title__org_id")
+      .on(table.title, table.orgId)
+      .nullsNotDistinct(),
+    uqAliasOrg: unique("uq__courses__alias__org_id")
+      .on(table.orgId, table.alias)
+      .nullsNotDistinct(),
+  }),
+);

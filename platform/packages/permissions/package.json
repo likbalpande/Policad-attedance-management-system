@@ -1,0 +1,17 @@
+{
+  "name": "@platform/permissions",
+  "private": true,
+  "version": "0.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "prebuild": "pnpm run typecheck",
+    "build": "tsup src/index.ts --format cjs --dts --sourcemap --clean",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@platform/tsconfig": "workspace:*",
+    "tsup": "^8.5.1",
+    "typescript": "^5.5.4"
+  }
+}
