@@ -388,23 +388,34 @@ org/admin creation), even though what they create (`admin_access_identifiers`,
 `admin_permissions_config_groups`, `admin_permitted_access_identifiers`) is
 what the *delegable* system will eventually check against.
 
-- `access-identifiers`: create + list (optionally filtered by `type`) rows
-  in `admin_access_identifiers` - the individual permission-atom catalog.
+- `access-identifiers`: create + list rows in `admin_access_identifiers` -
+  the individual permission-atom catalog. List takes an optional `type`
+  filter AND an optional `permissionConfigGroupId` filter (404s if that
+  group doesn't exist) - listing "which access identifiers belong to group
+  X" lives here, not on `permission-config-groups`, because the response is
+  fundamentally an access-identifier read, not a group action (the DAL join
+  itself is still owned by `permitted-access-identifiers.repository.ts`,
+  the join table - the service just calls whichever repo fn fits the given
+  filter).
 - `permission-config-groups`: create + list groups in
-  `admin_permissions_config_groups`, plus `POST/GET
-  /:id/access-identifiers` to attach/list which access identifiers belong to
-  a group (`admin_permitted_access_identifiers`). The attach endpoint
-  validates the group exists and every identifier's `type` matches the
-  group's `type` at the service layer (not just relying on the DB's
-  composite FK) so a bad request surfaces as 404/400 instead of a raw
-  FK-violation error.
+  `admin_permissions_config_groups`, plus mutating a group's membership in
+  `admin_permitted_access_identifiers`: `POST /:id/access-identifiers`
+  (attach - validates the group exists and every identifier's `type`
+  matches the group's `type` at the service layer, not just relying on the
+  DB's composite FK, so a bad request surfaces as 404/400 instead of a raw
+  FK-violation error) and `DELETE /:id/access-identifiers/:accessIdentifierId`
+  (detach - 404s if that pair isn't currently permitted).
 
-No delete/detach endpoints yet (mirrors organizations/users, which also
-only have create+list so far). Scope deliberately stops short of
-`user_permissions` (assigning a config group to a specific user for a
-specific resource) - that's the FTA "assign faculty to batch/course with
-P_B/P_C" feature (product-idea.txt:26-27), a separate later module that also
-needs batches/courses to exist first.
+No delete on `access-identifiers`/`permission-config-groups` themselves yet
+(mirrors organizations/users, which also only have create+list so far) -
+only the join-table membership (`admin_permitted_access_identifiers`) has a
+delete, since removing a group's access identifier is a safe, expected
+admin action while deleting a catalog entry or group outright risks
+orphaning other groups/rows that still reference it via the composite FKs.
+Scope deliberately stops short of `user_permissions` (assigning a config
+group to a specific user for a specific resource) - that's the FTA "assign
+faculty to batch/course with P_B/P_C" feature (product-idea.txt:26-27), a
+separate later module that also needs batches/courses to exist first.
 
 ## LAG (Live Attendance Gateway)
 

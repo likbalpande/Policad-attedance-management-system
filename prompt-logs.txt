@@ -608,3 +608,11 @@ Selected: Skip task-notifications entirely
 [2026-08-04T17:47:56.379Z] USER_MESSAGE
 can you also refactor the prompt-logs.txt to remove that notif text
 ---
+[2026-08-04T18:09:46.171Z] USER_MESSAGE
+I dont think we should allow access identifiers listing as per permission groups in the permission groups api, instead we should have a list query in access identifier where we send permission-config-group-id as a param, isnt it? what do you think?
+---
+[2026-08-04T18:21:34.773Z] USER_MESSAGE
+go ahead
+
+also add a DELETE endpoint to remove an access identifier from group
+---

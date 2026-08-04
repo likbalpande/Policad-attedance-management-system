@@ -70,7 +70,8 @@ actions per that file's own documented rule).
    - Upgrading `checkPermission()` to do real resource-scoped checks -
      depends on `user_permissions` existing.
    - Delete/detach endpoints - mirrors organizations/users, which also only
-     have create+list today.
+     have create+list today. (Revised in PART 5 below: a detach endpoint was
+     added for the join table specifically.)
 
 PART 3: Verification
 ----------------------
@@ -88,6 +89,46 @@ Updated `.claude/skills/architecture/SKILL.md`:
 - "Still open" bullet on resource-scoped RBAC reworded - no longer "blocked
   on the permissions-config module not existing" (it now exists), instead
   blocked on `user_permissions` (the FTA faculty-assignment feature).
+
+PART 5: Follow-up refactor (user-requested, same day)
+---------------------------------------------------------
+User pushed back on the initial route split: PART 2's `GET
+/permission-config-groups/:id/access-identifiers` (list a group's members)
+lived in the wrong module - the response is an `AccessIdentifierRow[]`,
+so it's an access-identifiers read, not a group action. Proposed moving it
+to a `permissionConfigGroupId` query filter on `GET /access-identifiers`
+instead, alongside the existing `type` filter. Discussed pros (single list
+implementation, composable filters, matches the resource actually being
+returned) vs. cons (breaks symmetry with the `POST .../access-identifiers`
+attach endpoint, which stays a genuine group mutation) - user agreed, asked
+to proceed, and also asked for a `DELETE` endpoint to detach an access
+identifier from a group (not in the original plan's scope).
+
+Changes:
+1. `GET /permission-config-groups/:id/access-identifiers` removed (its
+   controller/service deleted). `access-identifiers.list.service.ts` now
+   takes an optional `permissionConfigGroupId` - when present, 404s if the
+   group doesn't exist, then calls
+   `permittedAccessIdentifiersRepository.listAccessIdentifiersForGroup`
+   (the join stays owned by the join-table's own repo file) and applies the
+   `type` filter in-memory on top if both filters were given (small
+   admin-configured catalogs, not worth pushing into the join query at the
+   cost of coupling `access-identifiers.repository.ts` to the join table).
+   New route: `GET /access-identifiers?permissionConfigGroupId=&type=`.
+2. `DELETE /permission-config-groups/:id/access-identifiers/:accessIdentifierId`
+   added - new DAL `removeAccessIdentifierFromGroup` (deletes the join row,
+   returns the deleted row or `undefined`), new
+   `remove-access-identifier.params.dto.ts` (`id` + `accessIdentifierId`),
+   service 404s if the group doesn't exist OR if that identifier wasn't
+   actually permitted for it. This stays on the `permission-config-groups`
+   module (unlike the GET) since detaching is a group-membership mutation,
+   same reasoning as the `POST` attach endpoint.
+3. `pnpm --filter @platform/dal build` and `pnpm --filter platform-backend
+   typecheck`/`lint` all ran clean after the change.
+4. Architecture skill's "Permissions-config module (PB)" subsection updated
+   to match: documents the `permissionConfigGroupId` filter's module
+   placement and the new detach endpoint, and explains why only the join
+   table (not the catalog/group tables themselves) got a delete.
 
 Still open / not yet discussed:
 - `user_permissions` / FTA "assign faculty to batch/course with P_B/P_C" -

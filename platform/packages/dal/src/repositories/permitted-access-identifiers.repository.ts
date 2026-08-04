@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { adminAccessIdentifiers, adminPermittedAccessIdentifiers, type DbClient } from "@platform/db";
 import type { PermissionScope } from "@platform/permissions";
 import { withSpan } from "@platform/tracing";
@@ -57,6 +57,32 @@ export async function listAccessIdentifiersForGroup(
         )
         .where(eq(adminPermittedAccessIdentifiers.permissionConfigGroupId, permissionConfigGroupId));
       return rows.map((row) => row.accessIdentifier);
+    },
+    DB_SPAN_ATTRS,
+  );
+}
+
+// Returns the deleted row, or undefined if the access identifier wasn't
+// permitted for this group to begin with - caller (permission-config-groups
+// service) turns that into a 404.
+export async function removeAccessIdentifierFromGroup(
+  permissionConfigGroupId: number,
+  accessIdentifierId: number,
+): Promise<PermittedAccessIdentifierRow | undefined> {
+  return withSpan(
+    "db.permittedAccessIdentifiers.removeAccessIdentifierFromGroup",
+    async () => {
+      const db: DbClient = getDb();
+      const [row] = await db
+        .delete(adminPermittedAccessIdentifiers)
+        .where(
+          and(
+            eq(adminPermittedAccessIdentifiers.permissionConfigGroupId, permissionConfigGroupId),
+            eq(adminPermittedAccessIdentifiers.accessIdentifierId, accessIdentifierId),
+          ),
+        )
+        .returning();
+      return row;
     },
     DB_SPAN_ATTRS,
   );

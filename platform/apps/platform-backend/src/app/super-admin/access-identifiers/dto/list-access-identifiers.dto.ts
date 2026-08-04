@@ -8,6 +8,7 @@ const PERMISSION_SCOPE_VALUES = Object.values(PERMISSION_SCOPE) as [
 
 export const listAccessIdentifiersDto = z.object({
   type: z.enum(PERMISSION_SCOPE_VALUES).optional(),
+  permissionConfigGroupId: z.coerce.number().int().positive().optional(),
 });
 
 export type ListAccessIdentifiersDto = z.infer<typeof listAccessIdentifiersDto>;
