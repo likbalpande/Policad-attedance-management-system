@@ -17,8 +17,15 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => {
   try {
     const data = JSON.parse(payload);
+    const prompt = data.prompt || '';
+    // Background task notifications get resubmitted through the same
+    // UserPromptSubmit hook as real typed input - skip them so the log
+    // stays a record of what the user actually typed, not agent output.
+    if (prompt.trim().startsWith('<task-notification>')) {
+      process.exit(0);
+    }
     const timestamp = new Date().toISOString();
-    const entry = `[${timestamp}] USER_MESSAGE\n${data.prompt}\n---\n`;
+    const entry = `[${timestamp}] USER_MESSAGE\n${prompt}\n---\n`;
     fs.appendFileSync(logFile, entry);
   } catch (err) {
     // Silently fail; never block the prompt

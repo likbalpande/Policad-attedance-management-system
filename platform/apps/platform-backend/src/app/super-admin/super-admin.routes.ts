@@ -4,6 +4,8 @@ import { authenticate } from "../../middlewares/authenticate.middleware";
 import { requireRole } from "../../middlewares/require-role.middleware";
 import { organizationsRouter } from "./organizations/organizations.routes";
 import { usersRouter } from "./users/users.routes";
+import { accessIdentifiersRouter } from "./access-identifiers/access-identifiers.routes";
+import { permissionConfigGroupsRouter } from "./permission-config-groups/permission-config-groups.routes";
 
 // authenticate + requireRole(SUPER_ADMIN) applied once here, not per-route
 // inside organizations.routes.ts/users.routes.ts - every route nested under
@@ -17,3 +19,5 @@ export const superAdminRouter: Router = Router();
 superAdminRouter.use(authenticate, requireRole(USER_ROLE.SUPER_ADMIN));
 superAdminRouter.use("/organizations", organizationsRouter);
 superAdminRouter.use("/users", usersRouter);
+superAdminRouter.use("/access-identifiers", accessIdentifiersRouter);
+superAdminRouter.use("/permission-config-groups", permissionConfigGroupsRouter);

@@ -591,3 +591,20 @@ I have a specific reason, in future, no one should forget to add message when it
 [2026-08-04T15:52:47.915Z] USER_MESSAGE
 its currently two objects which is messy, having a single entity is better
 ---
+[2026-08-04T16:55:45.281Z] USER_MESSAGE
+can you see what feature should we pick in PB?
+---
+[2026-08-04T16:57:30.639Z] QUESTION
+Q: Which feature should we build next in PB?
+Selected: Permissions-config (P_O/P_B/P_C CRUD)
+---
+[2026-08-04T17:44:55.802Z] USER_MESSAGE
+why current change in prompt-logs.txt looks wierd?
+---
+[2026-08-04T17:46:46.335Z] QUESTION
+Q: How should the hook handle non-user-typed prompts (like task-notifications)?
+Selected: Skip task-notifications entirely
+---
+[2026-08-04T17:47:56.379Z] USER_MESSAGE
+can you also refactor the prompt-logs.txt to remove that notif text
+---

@@ -377,6 +377,35 @@ that's the whole mechanism a config group grants through.
   all isn't delegable and belongs on `requireRole` instead, not in this
   catalog.
 
+### Permissions-config module (PB)
+
+`app/super-admin/access-identifiers/` and
+`app/super-admin/permission-config-groups/` - lets FTSA (super_admin) build
+up the P_O/P_B/P_C catalog (product-idea.txt: "FTSA create P_O, P_B, P_C
+(which govern RBAC)"). Both are **non-delegable** themselves (mounted under
+`superAdminRouter`, `requireRole(SUPER_ADMIN)` only - same tier as
+org/admin creation), even though what they create (`admin_access_identifiers`,
+`admin_permissions_config_groups`, `admin_permitted_access_identifiers`) is
+what the *delegable* system will eventually check against.
+
+- `access-identifiers`: create + list (optionally filtered by `type`) rows
+  in `admin_access_identifiers` - the individual permission-atom catalog.
+- `permission-config-groups`: create + list groups in
+  `admin_permissions_config_groups`, plus `POST/GET
+  /:id/access-identifiers` to attach/list which access identifiers belong to
+  a group (`admin_permitted_access_identifiers`). The attach endpoint
+  validates the group exists and every identifier's `type` matches the
+  group's `type` at the service layer (not just relying on the DB's
+  composite FK) so a bad request surfaces as 404/400 instead of a raw
+  FK-violation error.
+
+No delete/detach endpoints yet (mirrors organizations/users, which also
+only have create+list so far). Scope deliberately stops short of
+`user_permissions` (assigning a config group to a specific user for a
+specific resource) - that's the FTA "assign faculty to batch/course with
+P_B/P_C" feature (product-idea.txt:26-27), a separate later module that also
+needs batches/courses to exist first.
+
 ## LAG (Live Attendance Gateway)
 
 Thin app. Per the product idea, LAG never touches the DB directly - it
@@ -462,8 +491,11 @@ directly, same as PB.
   Could also host a local OTel collector/Jaeger/Tempo when tracing needs one.
 - Resource-scoped RBAC (P_O/P_B/P_C via `admin_permitted_access_identifiers`)
   - `checkPermission` only supports the role-based bypass path today, see
-  "Auth & RBAC middleware (PB)" above. Blocked on the permissions-config
-  module (P_O/P_B/P_C CRUD) not existing yet.
+  "Auth & RBAC middleware (PB)" above. The permissions-config module (P_O/
+  P_B/P_C CRUD) now exists (see "Permissions-config module (PB)" above), but
+  resource-scoped checking still needs `user_permissions` (assigning a
+  config group to a user for a resource - the FTA "assign faculty to batch/
+  course" feature) before `checkPermission` can be upgraded.
 - Trace backend: no OTLP endpoint has been chosen/stood up yet (self-hosted
   collector vs. a SaaS vendor) - traces currently only go to stdout via the
   console exporter fallback.

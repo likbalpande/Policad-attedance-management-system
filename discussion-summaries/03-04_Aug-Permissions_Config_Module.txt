@@ -1,0 +1,104 @@
+Discussion Summary - 04 Aug 2026 - PB Permissions-Config Module (Access Identifiers + Config Groups)
+=======================================================================================================
+
+PART 1: Scope discussion
+-------------------------
+User asked what feature to pick next in PB. Explored the current PB state
+(auth, org creation, admin creation implemented; 19 DB tables but only
+organizations/users have DAL repos; permissions.constants.ts empty,
+checkPermission() hard-denies every non-bypass role). Cross-checked
+product-idea.txt and the prior two discussion summaries, which both call
+out the permissions-config module (admin_access_identifiers /
+admin_permissions_config_groups / admin_permitted_access_identifiers CRUD)
+as the explicit blocker for resource-scoped RBAC and every downstream
+delegable feature.
+
+Presented two candidates: permissions-config module vs. batches+courses
+CRUD. User picked permissions-config module - matches the repo's own
+stated dependency chain (product-idea.txt:21: "FTSA create P_O, P_B, P_C
+(which govern RBAC)").
+
+PART 2: Implementation
+------------------------
+Followed the existing super-admin module pattern exactly (mirrors
+`app/super-admin/organizations/` and `app/super-admin/users/`): routes ->
+`validate(dto)` -> controller -> service -> DAL repository. Both new
+modules are non-delegable (super_admin only, `requireRole` at the
+`superAdminRouter` level - NOT added to `permissions.constants.ts`'s
+`PERMISSIONS` catalog, since that's reserved for delegable/resource-scoped
+actions per that file's own documented rule).
+
+1. New DAL repositories (`packages/dal/src/repositories/`):
+   - `access-identifiers.repository.ts` - createAccessIdentifier,
+     listAccessIdentifiers(type?), findAccessIdentifiersByIds(ids) (used
+     for attach-request validation).
+   - `permission-config-groups.repository.ts` - createPermissionConfigGroup,
+     listPermissionConfigGroups(type?), findPermissionConfigGroupById.
+   - `permitted-access-identifiers.repository.ts` -
+     addAccessIdentifiersToGroup(groupId, type, ids[]) (bulk insert),
+     listAccessIdentifiersForGroup(groupId) (joins back to
+     admin_access_identifiers).
+   All three exported from `packages/dal/src/index.ts` alongside their row
+   types; the `<TABLE>_CONSTRAINTS` re-exports for these tables already
+   existed from the prior session's constraint-name refactor.
+   `@platform/permissions` added as a direct dependency of `@platform/dal`
+   (needed for the `PermissionScope` type in the new repos' signatures -
+   was previously only a transitive dependency via `@platform/db`).
+
+2. New app modules
+   (`apps/platform-backend/src/app/super-admin/`):
+   - `access-identifiers/` - `POST /` (create), `GET /?type=` (list).
+   - `permission-config-groups/` - `POST /` (create), `GET /?type=` (list),
+     `POST /:id/access-identifiers` (attach), `GET /:id/access-identifiers`
+     (list group membership).
+   The attach endpoint's service validates the group exists (404 if not)
+   and that every requested access identifier exists and its `type`
+   matches the group's `type` (400 if not) BEFORE inserting - an
+   application-level check rather than leaning on the DB's composite FK, so
+   callers get a clean 400/404 instead of a raw FK-violation error. Both
+   create services still catch unique-violations the same way
+   organizations/users do (`assertNoUniqueViolation` +
+   `<TABLE>_CONSTRAINTS`).
+   Both routers mounted in `super-admin.routes.ts` alongside
+   organizations/users (`/access-identifiers`, `/permission-config-groups`).
+
+3. Explicitly out of scope this session (flagged in the plan up front):
+   - `user_permissions` (assigning a config group to a specific user for a
+     specific resource) - that's the FTA "assign faculty to batch/course
+     with P_B/P_C" feature (product-idea.txt:26-27), needs batches/courses
+     to exist first.
+   - Upgrading `checkPermission()` to do real resource-scoped checks -
+     depends on `user_permissions` existing.
+   - Delete/detach endpoints - mirrors organizations/users, which also only
+     have create+list today.
+
+PART 3: Verification
+----------------------
+`pnpm --filter @platform/dal build` and `pnpm --filter platform-backend
+typecheck`/`lint` all ran clean. No live end-to-end smoke test performed
+(same as the prior session - no local Postgres/.env configured in this
+environment); flagged as still open.
+
+PART 4: Architecture skill + this summary
+---------------------------------------------
+Updated `.claude/skills/architecture/SKILL.md`:
+- New "### Permissions-config module (PB)" subsection under the PB folder
+  structure section, documenting both new modules and the explicit
+  `user_permissions` scope boundary.
+- "Still open" bullet on resource-scoped RBAC reworded - no longer "blocked
+  on the permissions-config module not existing" (it now exists), instead
+  blocked on `user_permissions` (the FTA faculty-assignment feature).
+
+Still open / not yet discussed:
+- `user_permissions` / FTA "assign faculty to batch/course with P_B/P_C" -
+  needs batches/courses to exist first, per product-idea.txt ordering.
+- Resource-scoped `checkPermission()` upgrade - depends on the above.
+- Batches + Courses CRUD - the other candidate from PART 1, not built yet.
+- Student login/refresh HTTP routes wiring status - still unverified (noted
+  as possibly stale in the exploration this session; worth confirming
+  directly before assuming open or closed).
+- Live end-to-end smoke test against a real Postgres - still not performed
+  across two sessions now, see PART 3.
+- Everything else already listed as open in the architecture skill (FT
+  folder structure, testing strategy, CI, local dev docker-compose, trace
+  backend, LAG/LALW SQS trace propagation, sampling strategy).

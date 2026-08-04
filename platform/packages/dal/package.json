@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@platform/db": "workspace:*",
+    "@platform/permissions": "workspace:*",
     "@platform/tracing": "workspace:*",
     "drizzle-orm": "^0.33.0"
   },

@@ -116,6 +116,9 @@ importers:
       '@platform/db':
         specifier: workspace:*
         version: link:../db
+      '@platform/permissions':
+        specifier: workspace:*
+        version: link:../permissions
       '@platform/tracing':
         specifier: workspace:*
         version: link:../tracing
