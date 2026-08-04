@@ -58,7 +58,7 @@ are unaffected - tsup is a build-time swap only.
 |---|---|---|
 | `db` | Drizzle schema, Drizzle client, drizzle-kit migrations. **Infra layer only.** Depends on `permissions` + `enums` purely for `.$type<T>()` column annotations (see "Application-level enum columns" below) - this doesn't change who may import `db` itself. | Only `dal` may import this. |
 | `dal` | Repository functions, organized by resource (e.g. `users.repository.ts`, `attendance.repository.ts`). **The only package allowed to import `db` and run queries.** | PB, LALW, and LAG if it ever needs DB access. |
-| `http` | `ApiSuccessResponse`/`ApiErrorResponse`, error classes, `asyncHandler`, Zod validation middleware, generic error-handling middleware, `getUniqueViolationConstraint` (maps a caught Postgres unique-violation error to the violated constraint name - see "Unique-constraint-name constants" below). | PB, LAG, LALW's local health-check shell. |
+| `http` | `ApiSuccessResponse`/`ApiErrorResponse`, error classes, `asyncHandler`, Zod validation middleware, generic error-handling middleware, `getUniqueViolationConstraint` + `assertNoUniqueViolation` (map a caught Postgres unique-violation error to the violated constraint name / throw `ConflictError` for it - see "Unique-constraint-name constants" below). | PB, LAG, LALW's local health-check shell. |
 | `logger` | Winston logger instance factory (`createLogger({ service })`). No tracing dependency/code - trace-log correlation happens via auto-instrumentation instead, see "Distributed tracing" below. | All apps, via a thin per-app wrapper. |
 | `types` | Cross-service contracts: PB<->LAG, LAG<->LALW SQS payload shape, LALW<->PB webhook payload, FT<->PB API shapes. | All apps. |
 | `permissions` | RBAC-specific vocabulary only: `PERMISSION_SCOPE` (general/batch/course/org, i.e. `P_O`/`P_B`/`P_C`) and `USER_ROLE` (super_admin/admin/faculty/student). | PB (RBAC checks), FT (conditional UI), `db` (column typing). |
@@ -90,27 +90,35 @@ of truth per enum.
 
 Every table's `unique()` constraint names in `packages/db/src/schema/*.ts`
 are defined as an exported `<TABLE>_CONSTRAINTS` object right in that
-table's own schema file, immediately above the table definition, and used
-directly inside the `unique(...)` calls (e.g. `ORGANIZATIONS_CONSTRAINTS.
-UQ_NAME` in `organizations.ts`) - one source of truth, never a hand-typed
-string in two places. Re-exported from `packages/dal`'s `index.ts` (not
-`packages/db` directly - `dal` is still the only sanctioned db-access
-boundary) so app-layer services can import them without reaching past `dal`.
+table's own schema file, immediately above the table definition. Each entry
+is a `{ key, message }` pair - `key` is the raw Postgres constraint name
+(used directly inside the `unique(...)` calls via `.key`, e.g.
+`ORGANIZATIONS_CONSTRAINTS.UQ_NAME.key` in `organizations.ts`), `message` is
+the user-facing conflict message for that constraint. One object per table,
+one source of truth - a constraint can't be added without also giving it a
+message (both live in the same object literal), and never a hand-typed
+constraint-name string in two places.
+
+Re-exported from `packages/dal`'s `index.ts` (not `packages/db` directly -
+`dal` is still the only sanctioned db-access boundary) so app-layer services
+can import it without reaching past `dal`.
 
 Usage pattern in a service: attempt the insert/update, catch the error, call
-`getUniqueViolationConstraint(err)` from `@platform/http` (checks for
-Postgres error code `23505`, returns the `constraint_name`), compare against
-the imported `<TABLE>_CONSTRAINTS.UQ_X` constant(s), throw `ConflictError`
-with a friendly message per constraint - see
+`assertNoUniqueViolation(err, FOO_CONSTRAINTS)` from `@platform/http`
+(internally: `getUniqueViolationConstraint(err)` checks for Postgres error
+code `23505` and returns the `constraint_name`; if it matches some entry's
+`.key`, throws `ConflictError` with that entry's `.message`; otherwise
+returns normally), then rethrow `err` unconditionally after the call - see
 `app/super-admin/organizations/services/organizations.create.service.ts` and
-`app/super-admin/users/services/users.create-admin.service.ts`. Deliberately not a
-pre-check query (`findByX` before insert) - that's an extra round trip and
-still race-prone; catching the DB's own constraint is the single source of
-truth and race-free.
+`app/super-admin/users/services/users.create-admin.service.ts`. Deliberately
+not a pre-check query (`findByX` before insert) - that's an extra round trip
+and still race-prone; catching the DB's own constraint is the single source
+of truth and race-free.
 
-All 19 tables have their constants defined and re-exported already, even
-though only the two services above consume them so far - ready for the next
-module that needs conflict handling without a follow-up refactor.
+All 19 tables have their constants (key + message) defined and re-exported
+already, even though only the two services above consume them so far -
+ready for the next module that needs conflict handling without a
+follow-up refactor.
 
 ### DB connection pooling - PB only
 

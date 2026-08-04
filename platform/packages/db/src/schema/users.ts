@@ -14,13 +14,16 @@ import type { UserRole } from "@platform/permissions";
 import { organizations } from "./organizations";
 import { timestamps } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the same
-// note in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const USERS_CONSTRAINTS = {
-  UQ_IDENTIFIER_ORG_ID: "uq__users__identifier__org_id",
-  UQ_EMAIL: "uq__users__email",
-  UQ_PHONE: "uq__users__phone",
-  UQ_WHATSAPP: "uq__users__whatsapp",
+  UQ_IDENTIFIER_ORG_ID: {
+    key: "uq__users__identifier__org_id",
+    message: "A user with this identifier already exists in this organization",
+  },
+  UQ_EMAIL: { key: "uq__users__email", message: "A user with this email already exists" },
+  UQ_PHONE: { key: "uq__users__phone", message: "A user with this phone number already exists" },
+  UQ_WHATSAPP: { key: "uq__users__whatsapp", message: "A user with this WhatsApp number already exists" },
 } as const;
 
 export const users = pgTable(
@@ -52,10 +55,10 @@ export const users = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqIdentifierOrg: unique(USERS_CONSTRAINTS.UQ_IDENTIFIER_ORG_ID).on(table.identifier, table.orgId),
-    uqEmail: unique(USERS_CONSTRAINTS.UQ_EMAIL).on(table.email),
-    uqPhone: unique(USERS_CONSTRAINTS.UQ_PHONE).on(table.phone),
-    uqWhatsapp: unique(USERS_CONSTRAINTS.UQ_WHATSAPP).on(table.whatsapp),
+    uqIdentifierOrg: unique(USERS_CONSTRAINTS.UQ_IDENTIFIER_ORG_ID.key).on(table.identifier, table.orgId),
+    uqEmail: unique(USERS_CONSTRAINTS.UQ_EMAIL.key).on(table.email),
+    uqPhone: unique(USERS_CONSTRAINTS.UQ_PHONE.key).on(table.phone),
+    uqWhatsapp: unique(USERS_CONSTRAINTS.UQ_WHATSAPP.key).on(table.whatsapp),
     passwordGeneratedAtIdx: index("idx__users__password_generated_at").on(
       table.passwordGeneratedAt,
     ),

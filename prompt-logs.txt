@@ -558,3 +558,36 @@ export const ADMIN_ACCESS_IDENTIFIERS_CONSTRAINTS = {
 
 is it a good idea or not?
 ---
+[2026-08-04T15:36:27.969Z] USER_MESSAGE
+Lets do it like this.
+---
+[2026-08-04T15:49:35.044Z] USER_MESSAGE
+
+
+
+why dont we do it like this?
+
+from
+export const ADMIN_ACCESS_IDENTIFIERS_CONSTRAINTS = {
+    UQ_IDENTIFIER_TYPE: "uq__admin_access_identifiers__identifier__type",
+    UQ_ID_TYPE: "uq__admin_access_identifiers__id__type",
+} as const;
+
+to
+export const ADMIN_ACCESS_IDENTIFIERS_CONSTRAINTS = {
+    UQ_IDENTIFIER_TYPE: {
+        key: "uq__admin_access_identifiers__identifier__type",
+        message: "...",
+    },
+    UQ_ID_TYPE: { 
+        key: "uq__admin_access_identifiers__id__type", 
+        message: "..." 
+    },
+} as const;
+---
+[2026-08-04T15:51:01.546Z] USER_MESSAGE
+I have a specific reason, in future, no one should forget to add message when it adds constriant, every constraint should have a corresponding message
+---
+[2026-08-04T15:52:47.915Z] USER_MESSAGE
+its currently two objects which is messy, having a single entity is better
+---

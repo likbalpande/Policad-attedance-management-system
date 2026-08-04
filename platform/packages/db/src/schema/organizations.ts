@@ -1,12 +1,13 @@
 import { pgTable, serial, varchar, text, boolean, unique } from "drizzle-orm/pg-core";
 import { timestamps } from "./timestamps";
 
-// Single source of truth for this table's constraint names - used here in
-// the schema definition itself and re-exported (via @platform/dal) for
-// services to match against caught unique-violation errors, so the two
-// never drift apart.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages, paired together so one can't be added
+// without the other. `.key` is used directly in the unique() calls below;
+// the whole object is re-exported (via @platform/dal) for services to pass
+// to @platform/http's assertNoUniqueViolation.
 export const ORGANIZATIONS_CONSTRAINTS = {
-    UQ_NAME: "uq__organizations__name",
+    UQ_NAME: { key: "uq__organizations__name", message: "An organization with this name already exists" },
 } as const;
 
 export const organizations = pgTable(
@@ -21,6 +22,6 @@ export const organizations = pgTable(
         ...timestamps(),
     },
     (table) => ({
-        uqName: unique(ORGANIZATIONS_CONSTRAINTS.UQ_NAME).on(table.name),
+        uqName: unique(ORGANIZATIONS_CONSTRAINTS.UQ_NAME.key).on(table.name),
     })
 );

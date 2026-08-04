@@ -2,11 +2,20 @@ import { pgTable, serial, varchar, text, unique } from "drizzle-orm/pg-core";
 import type { PermissionScope } from "@platform/permissions";
 import { timestamps } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the note
-// in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS = {
-  UQ_TITLE_TYPE: "uq__admin_permissions_config_groups__title__type",
-  UQ_ID_TYPE: "uq__admin_permissions_config_groups__id__type",
+  UQ_TITLE_TYPE: {
+    key: "uq__admin_permissions_config_groups__title__type",
+    message: "A permissions config group with this title already exists for this type",
+  },
+  // (id, type) is only unique to support the composite FK from
+  // user_permissions - id alone is already unique, so this can't actually
+  // be violated in practice.
+  UQ_ID_TYPE: {
+    key: "uq__admin_permissions_config_groups__id__type",
+    message: "This permissions config group already exists for this type",
+  },
 } as const;
 
 export const adminPermissionsConfigGroups = pgTable(
@@ -20,10 +29,10 @@ export const adminPermissionsConfigGroups = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqTitleType: unique(ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS.UQ_TITLE_TYPE).on(
+    uqTitleType: unique(ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS.UQ_TITLE_TYPE.key).on(
       table.title,
       table.type,
     ),
-    uqIdType: unique(ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS.UQ_ID_TYPE).on(table.id, table.type),
+    uqIdType: unique(ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS.UQ_ID_TYPE.key).on(table.id, table.type),
   }),
 );

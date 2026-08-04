@@ -4,11 +4,13 @@ import { users } from "./users";
 import { adminPermissionsConfigGroups } from "./admin-permissions-config-groups";
 import { createdAtOnly } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the note
-// in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const USER_PERMISSIONS_CONSTRAINTS = {
-  UQ_USER_GROUP_RESOURCE:
-    "uq__user_permissions__user_id__admin_permissions_config_group_id__resource_id",
+  UQ_USER_GROUP_RESOURCE: {
+    key: "uq__user_permissions__user_id__admin_permissions_config_group_id__resource_id",
+    message: "This user already has this permission assigned for this resource",
+  },
 } as const;
 
 export const userPermissions = pgTable(
@@ -35,7 +37,7 @@ export const userPermissions = pgTable(
       columns: [table.adminPermissionsConfigGroupId, table.resourceType],
       foreignColumns: [adminPermissionsConfigGroups.id, adminPermissionsConfigGroups.type],
     }),
-    uqUserGroupResource: unique(USER_PERMISSIONS_CONSTRAINTS.UQ_USER_GROUP_RESOURCE)
+    uqUserGroupResource: unique(USER_PERMISSIONS_CONSTRAINTS.UQ_USER_GROUP_RESOURCE.key)
       .on(table.userId, table.adminPermissionsConfigGroupId, table.resourceId)
       .nullsNotDistinct(),
   }),

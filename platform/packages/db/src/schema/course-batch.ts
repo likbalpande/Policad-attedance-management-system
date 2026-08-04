@@ -4,10 +4,13 @@ import { batches } from "./batches";
 import { users } from "./users";
 import { createdAtOnly } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the note
-// in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const COURSE_BATCH_CONSTRAINTS = {
-  UQ_COURSE_BATCH: "uq__course_batch__course_id__batch_id",
+  UQ_COURSE_BATCH: {
+    key: "uq__course_batch__course_id__batch_id",
+    message: "This course is already assigned to this batch",
+  },
 } as const;
 
 export const courseBatch = pgTable(
@@ -26,7 +29,7 @@ export const courseBatch = pgTable(
     ...createdAtOnly(),
   },
   (table) => ({
-    uqCourseBatch: unique(COURSE_BATCH_CONSTRAINTS.UQ_COURSE_BATCH)
+    uqCourseBatch: unique(COURSE_BATCH_CONSTRAINTS.UQ_COURSE_BATCH.key)
       .on(table.courseId, table.batchId)
       .nullsNotDistinct(),
     batchIdIdx: index("idx__course_batch__batch_id").on(table.batchId),

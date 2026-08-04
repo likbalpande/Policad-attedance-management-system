@@ -3,11 +3,17 @@ import { courses } from "./courses";
 import { users } from "./users";
 import { timestamps } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the note
-// in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const COURSE_SESSIONS_CONSTRAINTS = {
-  UQ_TITLE_COURSE: "uq__course_sessions__title__course_id",
-  UQ_COURSE_ALIAS: "uq__course_sessions__course_id__alias",
+  UQ_TITLE_COURSE: {
+    key: "uq__course_sessions__title__course_id",
+    message: "A session with this title already exists for this course",
+  },
+  UQ_COURSE_ALIAS: {
+    key: "uq__course_sessions__course_id__alias",
+    message: "A session with this alias already exists for this course",
+  },
 } as const;
 
 export const courseSessions = pgTable(
@@ -27,10 +33,10 @@ export const courseSessions = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqTitleCourse: unique(COURSE_SESSIONS_CONSTRAINTS.UQ_TITLE_COURSE)
+    uqTitleCourse: unique(COURSE_SESSIONS_CONSTRAINTS.UQ_TITLE_COURSE.key)
       .on(table.title, table.courseId)
       .nullsNotDistinct(),
-    uqCourseAlias: unique(COURSE_SESSIONS_CONSTRAINTS.UQ_COURSE_ALIAS)
+    uqCourseAlias: unique(COURSE_SESSIONS_CONSTRAINTS.UQ_COURSE_ALIAS.key)
       .on(table.courseId, table.alias)
       .nullsNotDistinct(),
   }),

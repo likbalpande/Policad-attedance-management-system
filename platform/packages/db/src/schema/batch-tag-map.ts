@@ -4,10 +4,13 @@ import { batchTags } from "./batch-tags";
 import { users } from "./users";
 import { createdAtOnly } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the note
-// in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const BATCH_TAG_MAP_CONSTRAINTS = {
-  UQ_BATCH_TAG: "uq__batch_tag_map__batch_id__batch_tag_id",
+  UQ_BATCH_TAG: {
+    key: "uq__batch_tag_map__batch_id__batch_tag_id",
+    message: "This tag is already applied to this batch",
+  },
 } as const;
 
 export const batchTagMap = pgTable(
@@ -26,7 +29,7 @@ export const batchTagMap = pgTable(
     ...createdAtOnly(),
   },
   (table) => ({
-    uqBatchTag: unique(BATCH_TAG_MAP_CONSTRAINTS.UQ_BATCH_TAG)
+    uqBatchTag: unique(BATCH_TAG_MAP_CONSTRAINTS.UQ_BATCH_TAG.key)
       .on(table.batchId, table.batchTagId)
       .nullsNotDistinct(),
     batchTagIdIdx: index("idx__batch_tag_map__batch_tag_id").on(table.batchTagId),

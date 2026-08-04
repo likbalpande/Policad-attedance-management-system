@@ -5,10 +5,13 @@ export * as organizationsRepository from "./repositories/organizations.repositor
 // usersRepository.UserRow) since app-layer code needs them for its own
 // derived types (e.g. PB's SafeUser = Omit<UserRow, "password" | ...>).
 export type { UserRow } from "./repositories/users.repository";
-// Constraint-name constants - single source of truth lives in @platform/db's
+// Constraint constants - single source of truth lives in @platform/db's
 // schema files, re-exported here so services can match caught unique-
 // violation errors without duplicating the string literals or importing
-// @platform/db directly (only this package may do that).
+// @platform/db directly (only this package may do that). Each entry is a
+// { key, message } pair (constraint name + its user-facing conflict
+// message) - pass the whole <TABLE>_CONSTRAINTS object to @platform/http's
+// assertNoUniqueViolation.
 export {
   ORGANIZATIONS_CONSTRAINTS,
   USERS_CONSTRAINTS,

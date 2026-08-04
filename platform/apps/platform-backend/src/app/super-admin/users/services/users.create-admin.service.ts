@@ -1,5 +1,5 @@
 import { usersRepository, organizationsRepository, USERS_CONSTRAINTS } from "@platform/dal";
-import { ConflictError, NotFoundError, getUniqueViolationConstraint } from "@platform/http";
+import { NotFoundError, assertNoUniqueViolation } from "@platform/http";
 import { USER_ROLE } from "@platform/permissions";
 import type { CreateAdminDto } from "../dto/create-admin-users.dto";
 import { sanitizeUser, type SafeUser } from "../utils/sanitize-user";
@@ -20,19 +20,7 @@ export async function createAdmin(input: CreateAdminDto, createdByUserId: number
     });
     return sanitizeUser(admin);
   } catch (err) {
-    const constraint = getUniqueViolationConstraint(err);
-    if (constraint === USERS_CONSTRAINTS.UQ_IDENTIFIER_ORG_ID) {
-      throw new ConflictError("A user with this identifier already exists in this organization");
-    }
-    if (constraint === USERS_CONSTRAINTS.UQ_EMAIL) {
-      throw new ConflictError("A user with this email already exists");
-    }
-    if (constraint === USERS_CONSTRAINTS.UQ_PHONE) {
-      throw new ConflictError("A user with this phone number already exists");
-    }
-    if (constraint === USERS_CONSTRAINTS.UQ_WHATSAPP) {
-      throw new ConflictError("A user with this WhatsApp number already exists");
-    }
+    assertNoUniqueViolation(err, USERS_CONSTRAINTS);
     throw err;
   }
 }

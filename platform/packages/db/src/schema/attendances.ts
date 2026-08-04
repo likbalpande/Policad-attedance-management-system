@@ -15,10 +15,13 @@ import { courseSessions } from "./course-sessions";
 import { geographyPoint } from "./custom-types";
 import { timestamps } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the note
-// in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const ATTENDANCES_CONSTRAINTS = {
-  UQ_USER_COURSE_SESSION: "uq__attendances__user_id__course_session_id",
+  UQ_USER_COURSE_SESSION: {
+    key: "uq__attendances__user_id__course_session_id",
+    message: "Attendance for this user in this session has already been recorded",
+  },
 } as const;
 
 export const attendances = pgTable(
@@ -51,7 +54,7 @@ export const attendances = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqUserCourseSession: unique(ATTENDANCES_CONSTRAINTS.UQ_USER_COURSE_SESSION)
+    uqUserCourseSession: unique(ATTENDANCES_CONSTRAINTS.UQ_USER_COURSE_SESSION.key)
       .on(table.userId, table.courseSessionId)
       .nullsNotDistinct(),
     courseSessionIdIdx: index("idx__attendances__course_session_id").on(table.courseSessionId),

@@ -3,11 +3,17 @@ import { organizations } from "./organizations";
 import { users } from "./users";
 import { timestamps } from "./timestamps";
 
-// Single source of truth for this table's constraint names - see the note
-// in organizations.ts.
+// Single source of truth for this table's constraint names and their
+// user-facing conflict messages - see the note in organizations.ts.
 export const BATCHES_CONSTRAINTS = {
-  UQ_TITLE_ORG: "uq__batches__title__org_id",
-  UQ_ALIAS_ORG: "uq__batches__alias__org_id",
+  UQ_TITLE_ORG: {
+    key: "uq__batches__title__org_id",
+    message: "A batch with this title already exists in this organization",
+  },
+  UQ_ALIAS_ORG: {
+    key: "uq__batches__alias__org_id",
+    message: "A batch with this alias already exists in this organization",
+  },
 } as const;
 
 export const batches = pgTable(
@@ -27,10 +33,10 @@ export const batches = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqTitleOrg: unique(BATCHES_CONSTRAINTS.UQ_TITLE_ORG)
+    uqTitleOrg: unique(BATCHES_CONSTRAINTS.UQ_TITLE_ORG.key)
       .on(table.title, table.orgId)
       .nullsNotDistinct(),
-    uqAliasOrg: unique(BATCHES_CONSTRAINTS.UQ_ALIAS_ORG)
+    uqAliasOrg: unique(BATCHES_CONSTRAINTS.UQ_ALIAS_ORG.key)
       .on(table.orgId, table.alias)
       .nullsNotDistinct(),
   }),
