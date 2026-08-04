@@ -4,6 +4,13 @@ import { users } from "./users";
 import { adminPermissionsConfigGroups } from "./admin-permissions-config-groups";
 import { createdAtOnly } from "./timestamps";
 
+// Single source of truth for this table's constraint names - see the note
+// in organizations.ts.
+export const USER_PERMISSIONS_CONSTRAINTS = {
+  UQ_USER_GROUP_RESOURCE:
+    "uq__user_permissions__user_id__admin_permissions_config_group_id__resource_id",
+} as const;
+
 export const userPermissions = pgTable(
   "user_permissions",
   {
@@ -28,9 +35,7 @@ export const userPermissions = pgTable(
       columns: [table.adminPermissionsConfigGroupId, table.resourceType],
       foreignColumns: [adminPermissionsConfigGroups.id, adminPermissionsConfigGroups.type],
     }),
-    uqUserGroupResource: unique(
-      "uq__user_permissions__user_id__admin_permissions_config_group_id__resource_id",
-    )
+    uqUserGroupResource: unique(USER_PERMISSIONS_CONSTRAINTS.UQ_USER_GROUP_RESOURCE)
       .on(table.userId, table.adminPermissionsConfigGroupId, table.resourceId)
       .nullsNotDistinct(),
   }),

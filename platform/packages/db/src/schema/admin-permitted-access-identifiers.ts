@@ -4,6 +4,13 @@ import { adminPermissionsConfigGroups } from "./admin-permissions-config-groups"
 import { adminAccessIdentifiers } from "./access-identifiers";
 import { createdAtOnly } from "./timestamps";
 
+// Single source of truth for this table's constraint names - see the note
+// in organizations.ts.
+export const ADMIN_PERMITTED_ACCESS_IDENTIFIERS_CONSTRAINTS = {
+    UQ_GROUP_ACCESS_IDENTIFIER:
+        "uq__admin_permitted_access_identifiers__permission_config_group_id__access_identifier_id",
+} as const;
+
 export const adminPermittedAccessIdentifiers = pgTable(
     "admin_permitted_access_identifiers",
     {
@@ -27,7 +34,7 @@ export const adminPermittedAccessIdentifiers = pgTable(
             foreignColumns: [adminAccessIdentifiers.id, adminAccessIdentifiers.type],
         }),
         uqGroupIdentifier: unique(
-            "uq__admin_permitted_access_identifiers__permission_config_group_id__access_identifier_id"
+            ADMIN_PERMITTED_ACCESS_IDENTIFIERS_CONSTRAINTS.UQ_GROUP_ACCESS_IDENTIFIER
         ).on(table.permissionConfigGroupId, table.accessIdentifierId),
     })
 );

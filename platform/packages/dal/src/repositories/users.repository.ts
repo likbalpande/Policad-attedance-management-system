@@ -3,7 +3,7 @@ import { users, type DbClient } from "@platform/db";
 import { withSpan } from "@platform/tracing";
 import { getDb } from "../client";
 
-type UserRow = typeof users.$inferSelect;
+export type UserRow = typeof users.$inferSelect;
 type NewUserInput = typeof users.$inferInsert;
 
 // Soft-deleted rows are excluded by default everywhere in this repository -
@@ -69,6 +69,33 @@ export async function findUserByIdentifierAndOrg(
         )
         .limit(1);
       return row;
+    },
+    DB_SPAN_ATTRS,
+  );
+}
+
+// Generic by role (not a dedicated listAdmins()) so it's directly reusable
+// when faculty/student listing gets built later - see product-idea.txt's
+// "All admins in an organization have VIEW access to students / batches /
+// courses / events" and similar role-scoped listing needs.
+export async function listUsersByRole(
+  role: UserRow["role"],
+  orgId?: number,
+): Promise<UserRow[]> {
+  return withSpan(
+    "db.users.listUsersByRole",
+    async () => {
+      const db: DbClient = getDb();
+      return db
+        .select()
+        .from(users)
+        .where(
+          and(
+            eq(users.role, role),
+            eq(users.isDeleted, false),
+            orgId !== undefined ? eq(users.orgId, orgId) : undefined,
+          ),
+        );
     },
     DB_SPAN_ATTRS,
   );

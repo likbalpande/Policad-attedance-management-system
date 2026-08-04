@@ -58,7 +58,7 @@ are unaffected - tsup is a build-time swap only.
 |---|---|---|
 | `db` | Drizzle schema, Drizzle client, drizzle-kit migrations. **Infra layer only.** Depends on `permissions` + `enums` purely for `.$type<T>()` column annotations (see "Application-level enum columns" below) - this doesn't change who may import `db` itself. | Only `dal` may import this. |
 | `dal` | Repository functions, organized by resource (e.g. `users.repository.ts`, `attendance.repository.ts`). **The only package allowed to import `db` and run queries.** | PB, LALW, and LAG if it ever needs DB access. |
-| `http` | `ApiSuccessResponse`/`ApiErrorResponse`, error classes, `asyncHandler`, Zod validation middleware, generic error-handling middleware. | PB, LAG, LALW's local health-check shell. |
+| `http` | `ApiSuccessResponse`/`ApiErrorResponse`, error classes, `asyncHandler`, Zod validation middleware, generic error-handling middleware, `getUniqueViolationConstraint` (maps a caught Postgres unique-violation error to the violated constraint name - see "Unique-constraint-name constants" below). | PB, LAG, LALW's local health-check shell. |
 | `logger` | Winston logger instance factory (`createLogger({ service })`). No tracing dependency/code - trace-log correlation happens via auto-instrumentation instead, see "Distributed tracing" below. | All apps, via a thin per-app wrapper. |
 | `types` | Cross-service contracts: PB<->LAG, LAG<->LALW SQS payload shape, LALW<->PB webhook payload, FT<->PB API shapes. | All apps. |
 | `permissions` | RBAC-specific vocabulary only: `PERMISSION_SCOPE` (general/batch/course/org, i.e. `P_O`/`P_B`/`P_C`) and `USER_ROLE` (super_admin/admin/faculty/student). | PB (RBAC checks), FT (conditional UI), `db` (column typing). |
@@ -85,6 +85,32 @@ DDL) and does not add a runtime check. Never redeclare the same string
 literals locally in `packages/db` or anywhere else - always import the type
 from whichever package owns that vocabulary, so there is exactly one source
 of truth per enum.
+
+### Unique-constraint-name constants
+
+Every table's `unique()` constraint names in `packages/db/src/schema/*.ts`
+are defined as an exported `<TABLE>_CONSTRAINTS` object right in that
+table's own schema file, immediately above the table definition, and used
+directly inside the `unique(...)` calls (e.g. `ORGANIZATIONS_CONSTRAINTS.
+UQ_NAME` in `organizations.ts`) - one source of truth, never a hand-typed
+string in two places. Re-exported from `packages/dal`'s `index.ts` (not
+`packages/db` directly - `dal` is still the only sanctioned db-access
+boundary) so app-layer services can import them without reaching past `dal`.
+
+Usage pattern in a service: attempt the insert/update, catch the error, call
+`getUniqueViolationConstraint(err)` from `@platform/http` (checks for
+Postgres error code `23505`, returns the `constraint_name`), compare against
+the imported `<TABLE>_CONSTRAINTS.UQ_X` constant(s), throw `ConflictError`
+with a friendly message per constraint - see
+`app/super-admin/organizations/services/organizations.create.service.ts` and
+`app/super-admin/users/services/users.create-admin.service.ts`. Deliberately not a
+pre-check query (`findByX` before insert) - that's an extra round trip and
+still race-prone; catching the DB's own constraint is the single source of
+truth and race-free.
+
+All 19 tables have their constants defined and re-exported already, even
+though only the two services above consume them so far - ready for the next
+module that needs conflict handling without a follow-up refactor.
 
 ### DB connection pooling - PB only
 
@@ -239,12 +265,13 @@ sessions, tags, permissions, attendance, webhooks, ...), so it uses a
 platform/apps/platform-backend/
   src/
     app/
-      <module-name>/
-        <module-name>.routes.ts
-        dto/<method>-<module-name>.dto.ts   (zod schema, TS type inferred from it)
-        controllers/<module-name>.<controller-name>.controller.ts
-        services/<module-name>.<service-name>.service.ts
-            -> calls @platform/dal, never @platform/db directly
+      <actor>/                                (optional grouping tier - see below)
+        <module-name>/
+          <module-name>.routes.ts
+          dto/<method>-<module-name>.dto.ts   (zod schema, TS type inferred from it)
+          controllers/<module-name>.<controller-name>.controller.ts
+          services/<module-name>.<service-name>.service.ts
+              -> calls @platform/dal, never @platform/db directly
     constants/
     middlewares/     - PB-specific only (e.g. RBAC/permission-check middleware
                         against @platform/permissions). Generic error/validation
@@ -268,10 +295,79 @@ shaping. Services stay framework-agnostic (no Express `req`/`res` leaking
 into them) so they're easy to unit test later even though there's no test
 suite requirement right now.
 
+**The `<actor>` grouping tier** (e.g. `app/super-admin/organizations/`,
+`app/super-admin/users/`) is used when every route in a module is scoped to
+a single actor tier (super_admin/admin/faculty/student) - it's optional, not
+every module needs it. The URL mount prefix mirrors it 1:1
+(`/api/v1/super-admin/...`). If a module's routes end up spanning multiple
+actor tiers (e.g. a future `users` module needs both super_admin-only routes
+and separate admin-only ones), split it into separate per-actor modules
+(`app/super-admin/users/`, `app/admin/users/`, ...) rather than mixing actor
+tiers inside one module folder - keeps "who can call this" discoverable from
+the file path alone.
+
+An actor-tier folder that's **entirely non-delegable** (see "Auth & RBAC
+middleware (PB)" below for what that means) gets one aggregating
+`<actor>.routes.ts` at its root (e.g. `app/super-admin/super-admin.routes.ts`)
+that applies `authenticate` + `requireRole(...)` once and mounts each
+module's router under it - individual modules' `*.routes.ts` files
+(`organizations.routes.ts`, `users.routes.ts`) then carry no auth middleware
+of their own, only `validate(dto)` + the controller. `app.ts` mounts just
+the one aggregator (`app.use("/api/v1/super-admin", superAdminRouter)`), not
+each module router separately.
+
 The full detailed rule-set for PB (numbered, prescriptive) lives in
 `platform/apps/platform-backend/backend-folder-structure-prompt.txt` -
 treat that as the authoritative PB-specific spec; this skill is the
 cross-app summary.
+
+### Auth & RBAC middleware (PB)
+
+`authenticate` (`middlewares/authenticate.middleware.ts`) - verifies the
+access token's signature/expiry (via `verifyStaffToken`/`verifyStudentToken`
+from `app/auth/services/auth.tokens.service.ts`, branching on the JWT's
+claimed `role` the same way `auth.refresh.service.ts` does) and attaches the
+payload to `req.user`. Does **not** re-check `loginCount` against the DB per
+request - product-idea.txt only requires that check at `/refresh` today; a
+per-request check is documented future work on LAG's side, not PB's. Doing
+it here would add a DB round trip to every request for a check the spec
+explicitly defers. Not applied globally - `/health` and `/api/v1/auth/*`
+itself stay unauthenticated.
+
+After `authenticate`, PB uses one of two different authorization
+middlewares depending on whether the route is **delegable** - could this
+access ever be granted to another role via a permission config group
+(P_O/P_B/P_C)? Delegable implies resource-scoped (org/batch/course), since
+that's the whole mechanism a config group grants through.
+
+- **Non-delegable** (permanently platform-level, e.g. everything under
+  `app/super-admin/` - create an organization, create an admin): use
+  `requireRole(...roles)` (`middlewares/require-role.middleware.ts`), a
+  blunt role gate with no notion of a specific permission identifier. For an
+  entire non-delegable actor-tier folder, apply it once in that folder's
+  aggregating `<actor>.routes.ts` (see the PB folder structure section
+  above) rather than per-route.
+- **Delegable** (resource-scoped, could be granted to an admin/faculty via a
+  config group - no module is on this path yet): use
+  `checkPermission(permissionId)` (`middlewares/check-permission.middleware.ts`)
+  per-route. Looks up `permissionId` in `constants/permissions.constants.ts`'s
+  `PERMISSIONS` map and allows the request if `req.user.role` is in that
+  permission's `bypassRoles` - this is the "unique permission identifier...
+  bypass mechanism based on role and action, kept in a constants file" from
+  product-idea.txt. **Resource-scoped checking against
+  `admin_permitted_access_identifiers` (P_O/P_B/P_C) is not implemented
+  yet** - blocked on the permissions-config module (P_O/P_B/P_C CRUD) not
+  existing. Until then, a role NOT in `bypassRoles` is denied outright (403)
+  rather than silently allowed - the middleware's shape is already what
+  resource-scoped checking will extend, so no caller-facing change is
+  expected when it lands. `PERMISSIONS` is empty today (no delegable module
+  exists yet) - the next module whose routes are genuinely grantable to
+  admin/faculty (e.g. course/batch-scoped actions) populates it. A
+  `PERMISSIONS` entry's `resourceType` is never `null` - a delegable
+  permission with no specific resource dependency uses
+  `PERMISSION_SCOPE.GENERAL`, not null; a permission with no resourceType at
+  all isn't delegable and belongs on `requireRole` instead, not in this
+  catalog.
 
 ## LAG (Live Attendance Gateway)
 
@@ -356,8 +452,10 @@ directly, same as PB.
 - CI setup.
 - Local dev docker-compose (Postgres, LocalStack, etc.) - not yet built.
   Could also host a local OTel collector/Jaeger/Tempo when tracing needs one.
-- PB's `constants/` contents and `middlewares/` specifics beyond the RBAC
-  permission check.
+- Resource-scoped RBAC (P_O/P_B/P_C via `admin_permitted_access_identifiers`)
+  - `checkPermission` only supports the role-based bypass path today, see
+  "Auth & RBAC middleware (PB)" above. Blocked on the permissions-config
+  module (P_O/P_B/P_C CRUD) not existing yet.
 - Trace backend: no OTLP endpoint has been chosen/stood up yet (self-hosted
   collector vs. a SaaS vendor) - traces currently only go to stdout via the
   console exporter fallback.

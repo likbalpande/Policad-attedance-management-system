@@ -3,6 +3,13 @@ import { organizations } from "./organizations";
 import { users } from "./users";
 import { timestamps } from "./timestamps";
 
+// Single source of truth for this table's constraint names - see the note
+// in organizations.ts.
+export const BATCHES_CONSTRAINTS = {
+  UQ_TITLE_ORG: "uq__batches__title__org_id",
+  UQ_ALIAS_ORG: "uq__batches__alias__org_id",
+} as const;
+
 export const batches = pgTable(
   "batches",
   {
@@ -20,10 +27,10 @@ export const batches = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqTitleOrg: unique("uq__batches__title__org_id")
+    uqTitleOrg: unique(BATCHES_CONSTRAINTS.UQ_TITLE_ORG)
       .on(table.title, table.orgId)
       .nullsNotDistinct(),
-    uqAliasOrg: unique("uq__batches__alias__org_id")
+    uqAliasOrg: unique(BATCHES_CONSTRAINTS.UQ_ALIAS_ORG)
       .on(table.orgId, table.alias)
       .nullsNotDistinct(),
   }),

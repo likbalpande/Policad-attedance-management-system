@@ -29,3 +29,5 @@ Every user message and every AskUserQuestion (question + selected option) is aut
 logged as a separate entry in prompt-logs.txt via .claude/settings.json hooks
 (.claude/hooks/log-prompt.js, .claude/hooks/log-question.js). Do not remove these hooks
 without removing this note.
+
+Always discuss different approaches, tell pros and cons before implementing any code  / idea / feature.

@@ -1,0 +1,162 @@
+Discussion Summary - 03 Aug 2026 - PB Backend Setup (Auth Middleware + Org/Admin Creation)
+=============================================================================================
+
+PART 1: Scope discussion
+-------------------------
+Reviewed product-idea.txt, table-structure.txt, the prior discussion summary,
+and the existing PB code (auth module, DAL, shared packages) to decide the
+next feature slice. Identified that no request-authentication middleware
+existed yet (nothing verified a JWT and attached the user to `req`, even
+though the auth module itself issues/refreshes tokens), no RBAC/permission-
+check middleware existed, and none of organizations/admin creation/
+permissions-config had routes.
+
+Asked the user to choose between four candidate slices (auth middleware +
+org/admin creation; permissions-config module first; student login route
+only; something else). User picked "Auth middleware + org/admin creation" -
+matches product-idea.txt's ordering and unblocks everything downstream.
+
+Flagged one dependency wrinkle before coding: org/admin creation are
+super_admin-only and NOT resource-scoped, so they need the RBAC middleware's
+role-based "bypass" path (product-idea.txt: "There will be a bypass
+mechanism in the validation middleware based on role an action... kept in a
+constant file"), not the P_O/P_B/P_C resource-scoped check - which doesn't
+exist yet (blocked on the permissions-config module). Decision: build a
+minimal RBAC middleware now (bypass-only) with resource-scoped checks added
+later without changing callers.
+
+PART 2: Implementation
+------------------------
+1. `authenticate` middleware (`middlewares/authenticate.middleware.ts`) -
+   verifies the access token's signature/expiry via the existing
+   `verifyStaffToken`/`verifyStudentToken` (branching on the JWT's claimed
+   `role`, same pattern as `auth.refresh.service.ts`'s `jwt.decode()` trick)
+   and attaches the payload to `req.user`. Deliberately does NOT re-check
+   `loginCount` against the DB per request - product-idea.txt only requires
+   that check at `/refresh` today (per-request enforcement is documented
+   future work on LAG, not PB) - so this middleware stays a pure JWT-verify,
+   no DB round trip per request.
+   New `src/types/express.d.ts` augments Express's `Request.user` with
+   `AccessTokenPayload` (from `@platform/types`).
+
+2. `checkPermission(permissionId)` middleware
+   (`middlewares/check-permission.middleware.ts`) + `constants/
+   permissions.constants.ts` (`PERMISSIONS` map: permission id ->
+   `bypassRoles`). Implements product-idea.txt's "unique permission
+   identifier... bypass mechanism based on role and action, kept in a
+   constants file" in one combined structure. Must run after `authenticate`.
+   Currently only the bypass path is live (`ORG_CREATE`, `ORG_LIST`,
+   `USERS_CREATE_ADMIN` all bypassRoles: [SUPER_ADMIN]) - resource-scoped
+   checking against `admin_permitted_access_identifiers` is NOT implemented
+   yet (blocked on the permissions-config module not existing), so a
+   non-bypass role is denied outright (403) rather than silently allowed.
+   The middleware's shape is already what resource-scoped checking will
+   extend into, so no caller-facing change is expected when that module
+   lands.
+
+3. Organizations module (`app/organizations/`) - `POST /api/v1/organizations`
+   (create, FTSA/super_admin only) + `GET /api/v1/organizations` (list, same
+   guard). Reuses existing `organizationsRepository.createOrganization` /
+   `listOrganizations` DAL functions unchanged.
+
+4. Users module (`app/users/`) - `POST /api/v1/users/admins` (creates an
+   admin AND assigns the org in the same call, super_admin only). No
+   separate "assign to org" endpoint: `users.org_id` is `NOT NULL`/
+   single-org-per-admin (product-idea.txt was already reworded in the prior
+   session to reflect this), so assignment can only happen at creation time.
+   Service pre-checks the target org exists (404 if not) before inserting.
+
+5. Duplicate handling: rather than pre-checking existence before insert
+   (extra round trip, still race-prone), both create services attempt the
+   insert directly and catch the Postgres unique-violation
+   (`code === "23505"`) via a new shared helper.
+
+PART 3: Constraint-name constants refactor (user-requested)
+--------------------------------------------------------------
+User caught that unique-constraint name strings (e.g.
+"uq__organizations__name") were duplicated between the Drizzle schema's
+`unique(...)` calls and the service-layer catch-block string comparisons,
+and asked for them to be centralized - then asked for the same treatment
+across ALL schemas so it's ready for future use, not just the two tables
+touched this session.
+
+Implementation:
+1. `getUniqueViolationConstraint(err)` added to `@platform/http`
+   (`db-error.util.ts`) - checks a caught error for Postgres's
+   `code === "23505"` (unique_violation) and returns `constraint_name` if
+   so, `undefined` otherwise. Generic, reusable by any service.
+2. Every table in `packages/db/src/schema/*.ts` that declares a `unique()`
+   constraint now exports a `<TABLE>_CONSTRAINTS` object (e.g.
+   `ORGANIZATIONS_CONSTRAINTS`, `USERS_CONSTRAINTS`,
+   `ADMIN_ACCESS_IDENTIFIERS_CONSTRAINTS`,
+   `ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS`,
+   `ADMIN_PERMITTED_ACCESS_IDENTIFIERS_CONSTRAINTS`,
+   `USER_PERMISSIONS_CONSTRAINTS`, `BATCHES_CONSTRAINTS`,
+   `BATCH_STUDENTS_CONSTRAINTS`, `COURSES_CONSTRAINTS`,
+   `COURSE_BATCH_CONSTRAINTS`, `COURSE_SESSIONS_CONSTRAINTS`,
+   `COURSE_TAG_MAP_CONSTRAINTS`, `BATCH_TAG_MAP_CONSTRAINTS`,
+   `ATTENDANCES_CONSTRAINTS`) defined right above the table definition and
+   used directly inside that table's own `unique(...)` calls - single
+   source of truth, no duplicated string literal even within `packages/db`
+   itself. Tables with no `unique()` constraint (org_daily_secrets,
+   course_tags, batch_tags, attendance_session_invocations,
+   attendance_history, webhook_history) were left alone - nothing to
+   extract. FK constraint names were deliberately NOT included - out of
+   scope (not used for unique-violation matching, the one consumer this
+   pattern serves).
+3. All of the above re-exported from `packages/dal`'s `index.ts` (not
+   `packages/db` directly) - `dal` stays the only package allowed to import
+   `db`, so app-layer services reach the constants through the same
+   sanctioned boundary they already use for repository functions.
+4. `organizations.create.service.ts` / `users.create-admin.service.ts`
+   updated to import and compare against the re-exported constants instead
+   of hardcoded strings.
+
+Only the two services built this session actually consume these constants
+today - the rest are pre-populated so the next module that needs conflict
+handling doesn't need a follow-up refactor.
+
+PART 4: Verification
+----------------------
+Full `pnpm -r run typecheck` / `lint` / `build` run clean across the whole
+workspace after every change (rebuilding `@platform/http` -> `@platform/db`
+-> `@platform/dal` in dependency order each time, since these packages
+resolve types from their built `dist/` output, not source - a stale dist
+initially caused misleading type errors, e.g. a schema field-name mismatch,
+until the dependency chain was rebuilt).
+
+No live end-to-end smoke test performed this session (no local `.env` /
+Postgres instance configured in this environment, unlike the prior
+session's smoke test against a real local DB) - flagged to the user as an
+open item; would need a running Postgres, a super_admin row seeded directly
+in DB (no signup API per spec), and a populated `.env` with the RSA key
+pairs.
+
+PART 5: Architecture skill + this summary
+---------------------------------------------
+User asked whether the architecture skill (.claude/skills/architecture/
+SKILL.md) and this discussion-summary file were being kept up to date -
+they were not yet at that point, prompting this update. Skill file changes:
+- `http` package's table row now mentions `getUniqueViolationConstraint`.
+- New "### Unique-constraint-name constants" subsection under Shared
+  packages, documenting the pattern from PART 3.
+- New "### Auth & RBAC middleware (PB)" subsection under PB folder
+  structure, documenting `authenticate` + `checkPermission` from PART 2.
+- "Still open" bullet about PB's `constants/`/`middlewares/` rewritten to
+  specifically call out resource-scoped RBAC (P_O/P_B/P_C) as the remaining
+  gap, now that the bypass-path middleware exists.
+
+Still open / not yet discussed:
+- Resource-scoped RBAC (P_O/P_B/P_C via admin_permitted_access_identifiers)
+  - blocked on the permissions-config module (P_O/P_B/P_C CRUD) itself not
+  being built yet. See PART 1/2.
+- Permissions-config module (admin_access_identifiers /
+  admin_permissions_config_groups / admin_permitted_access_identifiers CRUD)
+  - not started.
+- Student login/refresh HTTP routes - DAL support exists (see prior
+  session), route itself not wired up.
+- Live end-to-end smoke test against a real Postgres for this session's
+  changes - not performed, see PART 4.
+- Everything else already listed as open in the architecture skill (FT
+  folder structure, testing strategy, CI, local dev docker-compose, trace
+  backend, LAG/LALW SQS trace propagation, sampling strategy).

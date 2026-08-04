@@ -6,6 +6,7 @@ import morgan from "morgan";
 import { ApiSuccessResponse, asyncHandler, errorHandler } from "@platform/http";
 import { notFoundMiddleware } from "./middlewares/not-found.middleware";
 import { authRouter } from "./app/auth/auth.routes";
+import { superAdminRouter } from "./app/super-admin/super-admin.routes";
 
 export function createApp(): Express {
     const app = express();
@@ -24,8 +25,8 @@ export function createApp(): Express {
     );
 
     app.use("/api/v1/auth", authRouter);
-    // more feature routers get registered here as each module is built, e.g.:
-    // app.use("/api/v1/organizations", organizationsRouter);
+    app.use("/api/v1/super-admin", superAdminRouter);
+    // more feature routers get registered here as each module is built
 
     app.use(notFoundMiddleware);
     app.use(errorHandler);

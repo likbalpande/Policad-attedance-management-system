@@ -14,6 +14,15 @@ import type { UserRole } from "@platform/permissions";
 import { organizations } from "./organizations";
 import { timestamps } from "./timestamps";
 
+// Single source of truth for this table's constraint names - see the same
+// note in organizations.ts.
+export const USERS_CONSTRAINTS = {
+  UQ_IDENTIFIER_ORG_ID: "uq__users__identifier__org_id",
+  UQ_EMAIL: "uq__users__email",
+  UQ_PHONE: "uq__users__phone",
+  UQ_WHATSAPP: "uq__users__whatsapp",
+} as const;
+
 export const users = pgTable(
   "users",
   {
@@ -43,10 +52,10 @@ export const users = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqIdentifierOrg: unique("uq__users__identifier__org_id").on(table.identifier, table.orgId),
-    uqEmail: unique("uq__users__email").on(table.email),
-    uqPhone: unique("uq__users__phone").on(table.phone),
-    uqWhatsapp: unique("uq__users__whatsapp").on(table.whatsapp),
+    uqIdentifierOrg: unique(USERS_CONSTRAINTS.UQ_IDENTIFIER_ORG_ID).on(table.identifier, table.orgId),
+    uqEmail: unique(USERS_CONSTRAINTS.UQ_EMAIL).on(table.email),
+    uqPhone: unique(USERS_CONSTRAINTS.UQ_PHONE).on(table.phone),
+    uqWhatsapp: unique(USERS_CONSTRAINTS.UQ_WHATSAPP).on(table.whatsapp),
     passwordGeneratedAtIdx: index("idx__users__password_generated_at").on(
       table.passwordGeneratedAt,
     ),

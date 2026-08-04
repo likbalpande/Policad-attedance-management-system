@@ -15,6 +15,12 @@ import { courseSessions } from "./course-sessions";
 import { geographyPoint } from "./custom-types";
 import { timestamps } from "./timestamps";
 
+// Single source of truth for this table's constraint names - see the note
+// in organizations.ts.
+export const ATTENDANCES_CONSTRAINTS = {
+  UQ_USER_COURSE_SESSION: "uq__attendances__user_id__course_session_id",
+} as const;
+
 export const attendances = pgTable(
   "attendances",
   {
@@ -45,7 +51,7 @@ export const attendances = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqUserCourseSession: unique("uq__attendances__user_id__course_session_id")
+    uqUserCourseSession: unique(ATTENDANCES_CONSTRAINTS.UQ_USER_COURSE_SESSION)
       .on(table.userId, table.courseSessionId)
       .nullsNotDistinct(),
     courseSessionIdIdx: index("idx__attendances__course_session_id").on(table.courseSessionId),

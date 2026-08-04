@@ -4,6 +4,12 @@ import { batchTags } from "./batch-tags";
 import { users } from "./users";
 import { createdAtOnly } from "./timestamps";
 
+// Single source of truth for this table's constraint names - see the note
+// in organizations.ts.
+export const BATCH_TAG_MAP_CONSTRAINTS = {
+  UQ_BATCH_TAG: "uq__batch_tag_map__batch_id__batch_tag_id",
+} as const;
+
 export const batchTagMap = pgTable(
   "batch_tag_map",
   {
@@ -20,7 +26,7 @@ export const batchTagMap = pgTable(
     ...createdAtOnly(),
   },
   (table) => ({
-    uqBatchTag: unique("uq__batch_tag_map__batch_id__batch_tag_id")
+    uqBatchTag: unique(BATCH_TAG_MAP_CONSTRAINTS.UQ_BATCH_TAG)
       .on(table.batchId, table.batchTagId)
       .nullsNotDistinct(),
     batchTagIdIdx: index("idx__batch_tag_map__batch_tag_id").on(table.batchTagId),

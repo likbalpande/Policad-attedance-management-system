@@ -3,6 +3,13 @@ import { courses } from "./courses";
 import { users } from "./users";
 import { timestamps } from "./timestamps";
 
+// Single source of truth for this table's constraint names - see the note
+// in organizations.ts.
+export const COURSE_SESSIONS_CONSTRAINTS = {
+  UQ_TITLE_COURSE: "uq__course_sessions__title__course_id",
+  UQ_COURSE_ALIAS: "uq__course_sessions__course_id__alias",
+} as const;
+
 export const courseSessions = pgTable(
   "course_sessions",
   {
@@ -20,10 +27,10 @@ export const courseSessions = pgTable(
     ...timestamps(),
   },
   (table) => ({
-    uqTitleCourse: unique("uq__course_sessions__title__course_id")
+    uqTitleCourse: unique(COURSE_SESSIONS_CONSTRAINTS.UQ_TITLE_COURSE)
       .on(table.title, table.courseId)
       .nullsNotDistinct(),
-    uqCourseAlias: unique("uq__course_sessions__course_id__alias")
+    uqCourseAlias: unique(COURSE_SESSIONS_CONSTRAINTS.UQ_COURSE_ALIAS)
       .on(table.courseId, table.alias)
       .nullsNotDistinct(),
   }),
