@@ -610,6 +610,18 @@ platform/apps/live-attendance-lambda-worker/
 No local `repositories/` folder here either - LALW calls `@platform/dal`
 directly, same as PB.
 
+## FT (Frontend)
+
+Vite + React + TS + Capacitor, one codebase serving both desktop-browser use
+(admin/faculty/super-admin) and the native student mobile app. Stack: Tailwind
++ shadcn/ui, React Router v7, TanStack Query + axios, Zustand (auth/session
+only), React Hook Form + Zod. Folder structure mirrors PB's actor-tier
+convention (`app/<actor>/<module>`: student/faculty/admin/super-admin, plus a
+`shared/` for actor-agnostic pages). Full rationale and the complete folder
+tree live in `platform/apps/frontend/frontend-setup.txt` - treat that as the
+authoritative FT-specific spec, same relationship PB's
+`backend-folder-structure-prompt.txt` has to this skill.
+
 ## Cross-cutting conventions (all HTTP-serving apps)
 
 - Validation library: **Zod** everywhere. DTOs infer their TS type from the
@@ -643,7 +655,6 @@ directly, same as PB.
 
 ## Still open (not yet decided - check with the user before assuming)
 
-- FT's internal folder structure.
 - Testing strategy (beyond "keep it testable").
 - CI setup.
 - Local dev docker-compose (Postgres, LocalStack, etc.) - not yet built.

@@ -1,0 +1,61 @@
+FT FRONTEND ARCHITECTURE DECISIONS - 2026-08-06
+
+OBJECTIVE:
+Decide architecture, folder structure, libraries and setup for FT
+(platform/apps/frontend), which does not exist in the codebase yet.
+
+CONTEXT GATHERED BEFORE DECIDING:
+- Loaded the architecture skill (FT folder structure was explicitly "still
+  open" there).
+- Reviewed product-idea.txt: 4 distinct actor portals (FTS/FTF/FTA/FTSA),
+  OTP + password login, asymmetric-JWT + UAI origin-hash auth, QR-based live
+  attendance via LAG/SQS/LALW, SSE + fixed-schedule polling for status.
+- Reviewed monorepo conventions (pnpm workspaces, tsup build packages,
+  @platform/tsconfig base is CJS/backend-oriented, PB's actor-tier folder
+  convention) and confirmed @platform/types, @platform/permissions,
+  @platform/uai are consumable as-is (CJS + .d.ts via tsup).
+
+DECISIONS MADE (asked user via AskUserQuestion for the subjective ones):
+1. UI/styling: Tailwind CSS v4 + shadcn/ui (user picked, over Tailwind-only/
+   MUI/Mantine) - full visual control, accessible primitives, fits Capacitor.
+2. Routing: React Router v7 (user picked, over TanStack Router).
+3. QR scanning (FTS): hybrid - native Capacitor scanner (mlkit) on device,
+   web fallback (html5-qrcode/zxing) in browser (user picked, over
+   native-only/web-only) - session hashes expire fast so native speed
+   matters on-device, but browser testing still needs to work.
+4. Token storage: Capacitor Preferences plugin (user picked, over raw
+   localStorage/Secure Storage) - has a web fallback so one code path
+   covers both browser (admin/faculty/super-admin) and native (student app).
+5. Decided directly (uncontroversial, stated with rationale, no pushback):
+   - Server state: TanStack Query. Client/global state: Zustand, scoped to
+     auth/session only (no duplication with server state).
+   - API client: single axios instance, interceptor-based single-flight
+     refresh-token queue on 401.
+   - Forms: React Hook Form + Zod (mirrors PB's Zod convention).
+   - Real-time: @microsoft/fetch-event-source (native EventSource can't
+     carry an Authorization header).
+   - Status polling: custom hook for the exact
+     5/15/30/60/75/90/105/120s schedule from product-idea.txt, not a fixed
+     refetchInterval.
+   - QR display (FTA/FTF): qrcode.react.
+   - Folder structure: actor-tier top folders (app/student, app/faculty,
+     app/admin, app/super-admin, app/shared) mirroring PB's
+     app/<actor>/<module> convention for cross-app consistency.
+   - tsconfig extends @platform/tsconfig/base.json but overrides
+     module/moduleResolution/jsx/lib for Vite - keeps the @platform/* path
+     mapping without inheriting CJS backend defaults.
+   - Testing default (not mandatory yet, matches backend stance): Vitest +
+     React Testing Library.
+
+OUTPUT:
+- platform/apps/frontend/frontend-setup.txt created - full decision list +
+  folder tree, authoritative FT-specific spec (same role
+  backend-folder-structure-prompt.txt plays for PB).
+- .claude/skills/architecture/SKILL.md updated: added an "FT (Frontend)"
+  section pointing to frontend-setup.txt, removed "FT's internal folder
+  structure" from "Still open".
+
+NEXT STEPS:
+- Scaffold the actual Vite/Capacitor project under platform/apps/frontend
+  when ready to start implementation (not done in this conversation - only
+  the decisions doc + empty directory were created).

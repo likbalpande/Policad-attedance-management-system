@@ -1,0 +1,119 @@
+FT (frontend) setup decisions - platform/apps/frontend, package @platform/frontend
+
+## Stack
+- Vite + React + TypeScript, @vitejs/plugin-react-swc
+- Capacitor (ios/android) wrapping the same build - one codebase for desktop-browser
+  (admin/faculty/super-admin) and the native student mobile app
+- Styling/UI: Tailwind CSS v4 + shadcn/ui (Radix primitives copied into components/ui/)
+- Routing: React Router v7, actor-scoped nested route trees, lazy-loaded per actor
+- Server state: TanStack Query
+- API client: two axios instances - pbClient (PB, most traffic) and lagClient (LAG,
+  attendance-hash submission only) - both get the access-token request interceptor
+  and both share one single-flight refresh-token queue (lib/auth-refresh.ts) on 401,
+  since refresh only ever happens via PB regardless of which instance triggered it
+- Client/global state: Zustand (auth/session store only - everything else is server
+  state via TanStack Query, no duplication)
+- Forms: React Hook Form + Zod resolver (mirrors PB's Zod convention)
+- Real-time: @microsoft/fetch-event-source for the SSE attendance-status stream
+  (native EventSource can't send an Authorization header, this can)
+- Status polling (get_attendance_status): custom hook implementing the fixed
+  5/15/30/60/75/90/105/120s schedule - not TanStack Query's fixed refetchInterval
+- QR display (FTA/FTF, session hashes): qrcode.react
+- QR scanning (FTS): hybrid - native scanner (@capacitor-mlkit/barcode-scanning) on
+  device, web fallback (html5-qrcode or zxing) when running in a plain browser
+- Token storage: Capacitor Preferences plugin (has a web impl backed by localStorage,
+  so one code path works for both browser and native)
+- Testing (default, not yet mandatory - matches PB's stance): Vitest + React Testing
+  Library
+- Workspace deps consumed as-is: @platform/types, @platform/permissions, @platform/uai
+  (all build to CJS+dts via tsup; Vite/esbuild consumes that fine)
+- Toasts: sonner, wrapped by lib/toast.ts - feature code imports the wrapper, never sonner
+- Icons: lucide-react, wrapped by components/icons.tsx - re-exports only the icons
+  actually used, under semantic names (e.g. IconEdit, not the raw lucide name)
+- Dates: date-fns, wrapped by lib/date.ts
+- Animation: Framer Motion (motion/react), used sparingly for purposeful micro-
+  interactions only (status pill transitions, QR-refresh tick, page/panel enter)
+  - not decorative, respects prefers-reduced-motion
+
+## Convention: wrap ad-hoc-call libraries
+Any library invoked directly from many unrelated call sites (toasts, icons, date
+formatting, clipboard, ...) gets a thin wrapper in lib/ or components/ - feature code
+never imports the vendor package directly. Centralizes defaults/styling in one place
+and makes swapping the library later a one-file change. Does not apply to libraries
+already centralized by construction (axios instances, TanStack Query, RHF).
+
+## Folder structure
+```
+platform/apps/frontend/
+  src/
+    app/
+      student/        (FTS)      <feature>/{pages,components}
+      faculty/         (FTF)     "
+      admin/            (FTA)    "
+      super-admin/        (FTSA) "
+      shared/               - login, unauthorized, 404, actor-agnostic pages
+    api/
+      <resource>.api.ts         - raw axios calls, one file per backend resource
+      <resource>.queries.ts       - TanStack Query hooks wrapping the .api.ts fns
+      super-admin/
+        organizations.api.ts / organizations.queries.ts
+        users.api.ts / users.queries.ts
+        access-identifiers.api.ts / access-identifiers.queries.ts
+        permission-config-groups.api.ts / permission-config-groups.queries.ts
+    components/
+      ui/                    - shadcn/ui primitives
+      <shared app components>  - layout, nav, QR display, etc.
+    hooks/                    - useAuth, useAttendancePolling, useSse, ...
+    lib/
+      pb-client.ts              - axios instance for PB
+      lag-client.ts               - axios instance for LAG (attendance-hash submit)
+      auth-refresh.ts               - shared single-flight refresh queue, used by
+                                       both clients' 401 interceptor
+      query-client.ts
+      auth-storage.ts          - Capacitor Preferences wrapper
+      sse.ts
+    stores/                     - zustand: auth.store.ts
+    routes/                      - route trees + RequireAuth/RequireRole guards
+    types/                        - FT-local types only (cross-service types live in
+                                     @platform/types)
+    config/
+      env.config.ts
+    styles/globals.css
+    main.tsx
+    App.tsx
+  capacitor.config.ts
+  index.html
+  vite.config.ts
+  tsconfig.json
+  package.json
+  ios/ android/                    - generated via `cap add`
+```
+Mirrors PB's actor-tier convention (app/<actor>/<module>) for cross-app mental-model
+consistency. `shared/` and `components/`/`hooks/`/`lib/` hold everything not scoped
+to one actor.
+
+`api/` is organized by **backend resource, not by FT actor** - a delegable resource
+like `batches` is one file pair used by both FTA and FTF (same PB endpoint, gated by
+different permissions), matching how PB itself only nests non-delegable modules under
+`super-admin/`. Pages/components import only from `.queries.ts`, never call `.api.ts`
+functions directly - keeps loading/error/cache state consistent through TanStack Query.
+Almost every `<resource>.api.ts` calls `pbClient`; only the attendance-marking submit
+call (FTS scanning flow) calls `lagClient` - keep that one isolated in its own
+`api/attendance-marking.api.ts` rather than mixed into a PB-backed file.
+
+## Config notes
+- tsconfig.json extends @platform/tsconfig/base.json, overrides module/moduleResolution
+  (bundler) + jsx (react-jsx) + lib (add DOM) - keeps the @platform/* path mapping for
+  go-to-definition without inheriting the CJS-oriented backend defaults
+- eslint.config.js extends @platform/eslint-config/base.js + react-hooks +
+  react-refresh plugins
+- Env: Vite's import.meta.env, VITE_-prefixed vars, one .env (not per-environment
+  files) - same "single file, identifier inside" convention as the backend apps.
+  Two base-URL vars: VITE_PB_API_BASE_URL, VITE_LAG_API_BASE_URL
+- RBAC on the client is UI-only (hide/disable actions user can't perform) via
+  @platform/permissions vocab - never trust the client, PB still enforces every check
+
+## Deferred / not decided here
+- CI setup (matches backend - still open)
+- Push notifications, deep linking specifics
+- Design system details (colors/typography) - separate pass via frontend-design skill

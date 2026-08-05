@@ -746,3 +746,41 @@ go ahead
 why this is removed?
     identifierOrgIdIdx: index("idx__users__identifier__org_id").on(table.identifier, table.orgId),
 ---
+[2026-08-05T18:04:38.907Z] USER_MESSAGE
+generate db migration
+---
+[2026-08-05T18:35:53.025Z] USER_MESSAGE
+help me decide the architecutre, folder structure, libraries, setup, folder structure and stuff about my react app which needs to be created in platform/apps/frontend
+
+create a frontend-setup.txt file correponding to it with decision that we make it here. Don't make it verbose. Nor it should be filled with redundant explanations which one can figure out.
+---
+[2026-08-05T18:40:37.615Z] QUESTION
+Q: UI component/styling approach for FT?
+Selected: Tailwind + shadcn/ui (Recommended)
+Q: Routing library for FT?
+Selected: React Router v7 (Recommended)
+Q: QR scanning approach for students marking attendance (FTS)? Session hashes change every second and expire fast, so scan speed/reliability matters.
+Selected: Hybrid: native on device, web fallback in browser
+Q: Where to store auth tokens client-side (access + refresh)?
+Selected: Capacitor Preferences (Recommended)
+---
+[2026-08-05T18:56:25.789Z] USER_MESSAGE
+folder structure
+---
+[2026-08-05T18:57:09.835Z] USER_MESSAGE
+api folder to store each api?
+---
+[2026-08-05T18:58:09.874Z] USER_MESSAGE
+what are we using for state management?
+---
+[2026-08-05T19:00:06.185Z] USER_MESSAGE
+There should be two separate axios instances, one for LAG and other for PB.
+---
+[2026-08-05T19:01:07.389Z] USER_MESSAGE
+Always create a custom function layer on libraries or components like toasts, icons, ....
+---
+[2026-08-05T19:02:07.726Z] USER_MESSAGE
+The UI theme needs to be minimal and in the light mode.
+     The theme will be managed in the standard way as done in any production setup. Make sure that UI should not look ai generated
+     with those common bluish purple theme at all. It should look like a polished, clean, modern and responsive application.
+---
