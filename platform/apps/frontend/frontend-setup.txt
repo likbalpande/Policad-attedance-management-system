@@ -113,7 +113,47 @@ call (FTS scanning flow) calls `lagClient` - keep that one isolated in its own
 - RBAC on the client is UI-only (hide/disable actions user can't perform) via
   @platform/permissions vocab - never trust the client, PB still enforces every check
 
+## Design / theme
+Light mode only, minimal - explicitly not the generic AI-SaaS indigo/violet gradient
+look. Direction: monochrome-first UI (near-black ink on off-white), color used only
+for semantic meaning (attendance status), one restrained warm accent for interactivity.
+
+Tokens (CSS custom properties, standard shadcn/ui token names - `background`,
+`foreground`, `primary`, `muted`, `border`, etc. - defined once in styles/globals.css
+under Tailwind v4's `@theme`, consumed only via Tailwind semantic classes, never a raw
+hex in component code):
+- background: #FCFCFB (soft off-white, not stark white, not cream)
+- foreground: #17181A (near-black ink - primary text, primary button fill)
+- muted-foreground: #6B6D71 (secondary text)
+- border: #E7E7E5 (hairline)
+- card: #FFFFFF
+- accent (links, focus ring, active nav/tab, selected row): #B4650D (warm amber -
+  deliberately not blue/violet; used sparingly, never as a fill color)
+- status/success (present): #1F7A4D
+- status/destructive (absent): #B3261E
+- status/warning (pending): #B58900
+
+Typography:
+- UI + headings: Inter Tight (variable, 400-700) - one sans family, weight carries
+  hierarchy, no separate decorative display face (this is a dense operational app,
+  not a marketing page)
+- Numeric/live data (QR countdown, session hashes/ids, timestamps, attendance counts,
+  status pills): IBM Plex Mono, uppercase + letter-spaced for pills - the signature
+  touch, a "departures-board" quality that's earned by the product (live QR sessions,
+  ticking timers), not decorative
+
+Shape/elevation: 8px radius (cards/inputs), 6px (buttons/badges), full-pill only for
+status badges. No drop shadows beyond a 1px hairline elevation on cards/dropdowns -
+borders do the separation work, not shadows.
+
+Theming architecture: built the standard production way even though only one theme
+ships now - all colors as CSS custom properties on `:root`, components reference
+semantic tokens only. Adding a dark theme later means defining `.dark` overrides, not
+a rewrite. No theme toggle UI until dark mode is actually requested.
+
+Responsive: mobile-first Tailwind breakpoints; Capacitor safe-area insets
+(env(safe-area-inset-*)) respected in the root layout for the native student app.
+
 ## Deferred / not decided here
 - CI setup (matches backend - still open)
 - Push notifications, deep linking specifics
-- Design system details (colors/typography) - separate pass via frontend-design skill
