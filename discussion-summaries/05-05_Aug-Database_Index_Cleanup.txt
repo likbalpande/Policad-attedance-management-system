@@ -1,0 +1,60 @@
+DATABASE INDEX CLEANUP - 2026-08-05
+
+OBJECTIVE:
+Audit the 12 explicit indexes added in the prior session (see
+05-05_Aug-Database_Index_Optimization.txt) against every actual query in
+@platform/dal - find missing indexes, redundant ones, and low-value ones.
+
+FINDINGS:
+1. Missing indexes needed: NONE. Every DAL query (18 functions across 7
+   repositories) is already covered by an index or PK, including via
+   leftmost-prefix reuse of composite indexes.
+
+2. Redundant (exact duplicate of an index a unique() constraint already
+   creates) - dropped:
+   - idx__users__email (dup of uq__users__email)
+   - idx__users__identifier__org_id (dup of uq__users__identifier__org_id)
+   - idx__organizations__name (dup of uq__organizations__name)
+   - idx__admin_permitted_access_identifiers__permission_config_group_id__access_identifier_id
+     (dup of uq__admin_permitted_access_identifiers__...)
+   - idx__user_permissions__user_id (userId is already the leading column
+     of uq__user_permissions__user_id__admin_permissions_config_group_id__resource_id,
+     so its index already serves userId-only lookups via leftmost prefix)
+
+3. Present but no supporting query / not a real discriminator - dropped:
+   - idx__users__password_generated_at (write-only column, never filtered/
+     ordered on anywhere in the DAL)
+   - idx__users__created_by_user_id (same - set on insert only, never
+     queried)
+   - idx__batches__id__org_id (id is the PK; WHERE id = ? AND orgId = ?
+     resolves to one row via the PK alone - orgId there is a post-filter on
+     a single row, not a discriminator)
+
+4. Present, technically usable but low value at current/expected scale -
+   KEPT (not worth the churn, but flagged):
+   - idx__admin_access_identifiers__type / idx__admin_permissions_config_groups__type
+     - type is a 4-value enum (general/batch/course/org) on small catalog
+       tables (tens of rows). ~25% selectivity - Postgres likely prefers a
+       seq scan over these at this size, but they do back real queries
+       (listAccessIdentifiers(type), listPermissionConfigGroups(type)) so
+       left in place.
+   - idx__user_permissions__admin_permissions_config_group_id - no current
+     query filters on this column alone; only earns its keep if a future
+     "list grantees of this config group" query is built. Left in place as
+     cheap insurance (single-column index, low write cost).
+   - idx__attendances__course_session_id - no DAL/repository exists yet for
+     the attendances table at all, so nothing uses this today. Reasonable
+     anticipatory index for a future "list attendance for a session" query
+     on what will be a large table - left as is.
+
+RESULT: 12 explicit indexes -> 7. Schema files edited directly (users.ts,
+batches.ts, organizations.ts, user-permissions.ts,
+admin-permitted-access-identifiers.ts) - no migration needed since no
+migrations/ directory has ever been generated for this schema (nothing has
+been applied to a live DB yet). @platform/db typecheck passes clean after
+the edits, including removing now-unused `index` imports.
+
+NEXT STEPS:
+- When migrations are first generated (drizzle-kit generate), the
+  generated SQL will reflect this already-cleaned-up index set - no
+  separate DROP INDEX migration required.

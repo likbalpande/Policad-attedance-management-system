@@ -59,9 +59,11 @@ export const users = pgTable(
     uqEmail: unique(USERS_CONSTRAINTS.UQ_EMAIL.key).on(table.email),
     uqPhone: unique(USERS_CONSTRAINTS.UQ_PHONE.key).on(table.phone),
     uqWhatsapp: unique(USERS_CONSTRAINTS.UQ_WHATSAPP.key).on(table.whatsapp),
-    passwordGeneratedAtIdx: index("idx__users__password_generated_at").on(
-      table.passwordGeneratedAt,
-    ),
+    // No separate index on email/[identifier, orgId] - uqEmail/uqIdentifierOrg's
+    // own unique() constraints already create those exact indexes.
+    roleIsDeletedIdx: index("idx__users__role__is_deleted").on(table.role, table.isDeleted),
+    roleOrgIdIsDeletedIdx: index("idx__users__role__org_id__is_deleted").on(table.role, table.orgId, table.isDeleted),
+    passwordGeneratedAtIdx: index("idx__users__password_generated_at").on(table.passwordGeneratedAt),
     createdByUserIdIdx: index("idx__users__created_by_user_id").on(table.createdByUserId),
   }),
 );

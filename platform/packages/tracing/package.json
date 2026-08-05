@@ -6,7 +6,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "prebuild": "pnpm run typecheck",
-    "build": "tsup src/index.ts --format cjs --dts --sourcemap --clean",
+    "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

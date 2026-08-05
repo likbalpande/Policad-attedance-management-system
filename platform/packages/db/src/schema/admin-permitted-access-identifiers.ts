@@ -38,5 +38,8 @@ export const adminPermittedAccessIdentifiers = pgTable(
         uqGroupIdentifier: unique(
             ADMIN_PERMITTED_ACCESS_IDENTIFIERS_CONSTRAINTS.UQ_GROUP_ACCESS_IDENTIFIER.key
         ).on(table.permissionConfigGroupId, table.accessIdentifierId),
+        // No separate index on [permissionConfigGroupId, accessIdentifierId] -
+        // uqGroupIdentifier's own unique() constraint already creates this
+        // exact index.
     })
 );

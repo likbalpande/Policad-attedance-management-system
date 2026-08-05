@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, varchar, unique, index } from "drizzle-orm/pg-core";
 import type { PermissionScope } from "@platform/permissions";
 import { timestamps } from "./timestamps";
 
@@ -34,5 +34,6 @@ export const adminAccessIdentifiers = pgTable(
             table.type
         ),
         uqIdType: unique(ADMIN_ACCESS_IDENTIFIERS_CONSTRAINTS.UQ_ID_TYPE.key).on(table.id, table.type),
+        idxType: index("idx__admin_access_identifiers__type").on(table.type),
     })
 );

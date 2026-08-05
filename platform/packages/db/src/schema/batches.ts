@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, text, integer, boolean, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, varchar, text, integer, boolean, unique, index } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
 import { users } from "./users";
 import { timestamps } from "./timestamps";
@@ -39,5 +39,10 @@ export const batches = pgTable(
     uqAliasOrg: unique(BATCHES_CONSTRAINTS.UQ_ALIAS_ORG.key)
       .on(table.orgId, table.alias)
       .nullsNotDistinct(),
+    orgIdIsDeletedIdx: index("idx__batches__org_id__is_deleted").on(table.orgId, table.isDeleted),
+    // No separate index on [id, orgId] - id is already the PK, so
+    // WHERE id = ? AND orgId = ? resolves to one row via the PK alone;
+    // orgId there is a post-filter check on that single row, not a
+    // discriminator that needs its own index.
   }),
 );

@@ -23,5 +23,7 @@ export const organizations = pgTable(
     },
     (table) => ({
         uqName: unique(ORGANIZATIONS_CONSTRAINTS.UQ_NAME.key).on(table.name),
+        // No separate index on name - uqName's own unique() constraint
+        // already creates this exact index.
     })
 );

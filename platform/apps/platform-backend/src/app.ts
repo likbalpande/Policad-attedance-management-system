@@ -7,6 +7,8 @@ import { ApiSuccessResponse, asyncHandler, errorHandler } from "@platform/http";
 import { notFoundMiddleware } from "./middlewares/not-found.middleware";
 import { authRouter } from "./app/auth/auth.routes";
 import { superAdminRouter } from "./app/super-admin/super-admin.routes";
+import { userPermissionsRouter } from "./app/user-permissions/user-permissions.routes";
+import { batchesRouter } from "./app/batches/batches.routes";
 
 export function createApp(): Express {
     const app = express();
@@ -26,6 +28,8 @@ export function createApp(): Express {
 
     app.use("/api/v1/auth", authRouter);
     app.use("/api/v1/super-admin", superAdminRouter);
+    app.use("/api/v1/user-permissions", userPermissionsRouter);
+    app.use("/api/v1/batches", batchesRouter);
     // more feature routers get registered here as each module is built
 
     app.use(notFoundMiddleware);

@@ -33,3 +33,6 @@ without removing this note.
 Always discuss different approaches, tell pros and cons before implementing any code  / idea / feature.
 
 At the end of every conversation / implementation, always update the discussion-summaries folder's #-<today's-date>.txt file for the discussion summary of that conversation.
+
+# Git
+Never run `git add`, `git commit`, or `git push` under any circumstances, even if explicitly asked. The user handles all git staging, committing, and pushing themselves.

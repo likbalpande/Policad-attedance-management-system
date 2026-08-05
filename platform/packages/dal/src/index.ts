@@ -4,12 +4,16 @@ export * as organizationsRepository from "./repositories/organizations.repositor
 export * as accessIdentifiersRepository from "./repositories/access-identifiers.repository";
 export * as permissionConfigGroupsRepository from "./repositories/permission-config-groups.repository";
 export * as permittedAccessIdentifiersRepository from "./repositories/permitted-access-identifiers.repository";
+export * as userPermissionsRepository from "./repositories/user-permissions.repository";
+export * as batchesRepository from "./repositories/batches.repository";
 // Row types - re-exported at the top level (not just reachable as
 // usersRepository.UserRow) since app-layer code needs them for its own
 // derived types (e.g. PB's SafeUser = Omit<UserRow, "password" | ...>).
 export type { UserRow } from "./repositories/users.repository";
 export type { AccessIdentifierRow } from "./repositories/access-identifiers.repository";
 export type { PermissionConfigGroupRow } from "./repositories/permission-config-groups.repository";
+export type { UserPermissionRow } from "./repositories/user-permissions.repository";
+export type { BatchRow } from "./repositories/batches.repository";
 // Constraint constants - single source of truth lives in @platform/db's
 // schema files, re-exported here so services can match caught unique-
 // violation errors without duplicating the string literals or importing

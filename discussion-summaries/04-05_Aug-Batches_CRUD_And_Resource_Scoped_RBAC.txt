@@ -1,0 +1,307 @@
+Discussion Summary - 05 Aug 2026 - PB Batches CRUD + Resource-Scoped RBAC + Minimal user_permissions
+=========================================================================================================
+
+PART 1: Scope discussion
+-------------------------
+User asked what's next in PB. Verified the prior session's "still open"
+list against the actual code (grepped for the student-login route) and
+found it was already wired despite being flagged as unverified -
+`POST /api/v1/auth/student/login` exists. Recommended batches CRUD as the
+real next step (next entity layer per product-idea.txt's ordering, and the
+blocker for `user_permissions`/attendance-session flow), ruled out
+`user_permissions` on its own since there'd be nothing to scope a grant to
+yet.
+
+User asked for batches CRUD with a twist: admin and faculty can both create
+a batch, but admin needs no permission check while faculty does. This
+exposed a real gap: `checkPermission()` only ever supported the role-bypass
+path - any non-bypass role was hard-denied regardless of any grant - and
+`user_permissions` (the table linking a user to a permission-config-group
+for a resource) had no DAL/API at all. Presented three options (stub the
+faculty path as always-403 for now / build the real check but seed grants
+directly via DB / build the real check plus a minimal grant API) - user
+picked "build it all." Also asked for full CRUD (create/list/get/update/
+delete-soft), and, after a follow-up question, settled the update/delete
+split: delete is admin-only (no faculty path, no permission check at all);
+create and update are both permission-gated for faculty.
+
+Given the resulting scope (a new resource-scoped RBAC engine, a new grant
+endpoint, and a full CRUD module with mixed per-role authorization), this
+was planned formally via EnterPlanMode rather than implemented directly,
+per this repo's standing "discuss approach before coding" instruction -
+same as the permissions-config module.
+
+PART 2: Design decisions made during planning
+-------------------------------------------------
+1. No new "admin"-tier route aggregator needed (initially assumed one would
+   be) - re-reading the architecture skill's own "Auth & RBAC middleware"
+   section showed the correct shape was already documented: a standalone,
+   non-actor-tier module router (`authenticate` only at the router level,
+   `checkPermission`/`requireRole` per route below it) exactly like
+   `app/batches/` ended up being built. Avoided introducing an
+   unneeded aggregator.
+2. Create uses an **org-scoped (P_O)** grant, update uses a **batch-scoped
+   (P_B)** grant - not the same grant for both. Reasoning: at creation time
+   there's no batch yet to scope P_B against, so P_O is the only option;
+   for update, an existing batch id is available, and P_B is documented to
+   mean "access to a specific batch" - reusing the org-wide create grant for
+   update would let a faculty who can create batches edit every batch in
+   the org, which is broader than intended. Flagged explicitly to the user
+   as "my design call" in the plan rather than asked, since it follows
+   directly from what P_O/P_B already mean.
+3. List/get needed no faculty permission check at all (product-idea.txt:38 -
+   "All admins... have VIEW access to... batches... in that organization",
+   nothing gates viewing behind P_B) - still routed through
+   `checkPermission` (not `requireRole`) with `bypassRoles` covering every
+   staff role, so "every API checks a permission identifier" holds
+   structurally even though the resource-scoped path never actually runs
+   for these two.
+4. The minimal `user_permissions` grant endpoint needed its own top-level
+   router (not nested under `super-admin`), since ADMIN (not just
+   SUPER_ADMIN) must be able to call it - `app/user-permissions/`,
+   `requireRole(SUPER_ADMIN, ADMIN)` at the router level (granting is
+   itself non-delegable, per product-idea.txt's FTA-owned "assign faculty
+   with P_B").
+
+PART 3: Implementation
+------------------------
+1. `packages/dal/src/repositories/user-permissions.repository.ts` - new.
+   `grantPermission`, `listPermissionsForUser`, and the actual RBAC check
+   `userHasAccessIdentifier({ userId, identifier, type, resourceId })` -
+   joins `user_permissions` -> `admin_permitted_access_identifiers` ->
+   `admin_access_identifiers`, returns whether a matching grant exists.
+   `user_permissions.resourceType` is already DB-constrained to match its
+   config group's `type` via that table's own composite FK, so the join
+   doesn't re-verify that leg.
+2. `packages/dal/src/repositories/batches.repository.ts` - new.
+   `createBatch`/`listBatches`/`findBatchById` follow the established
+   `withSpan`/`isDeleted`-exclusion conventions. `updateBatch(id, orgId,
+   patch)` is the first generic partial-update in the DAL (every prior
+   `update(...)` was a narrow, purpose-named mutator in
+   `users.repository.ts`). `softDeleteBatch` is the first soft-delete
+   writer anywhere in the DAL (every table has had an `isDeleted` column
+   since it was first modeled, nothing wrote to one until now). Both scoped
+   by `orgId` as well as `id`.
+3. `middlewares/check-permission.middleware.ts` upgraded - new optional
+   `resolveResourceId(req)` param (defaults to `req.user.orgId`), now
+   `async`, and after the bypass-role check fails it calls
+   `userHasAccessIdentifier` for a real allow/deny instead of hard-denying.
+4. `constants/permissions.constants.ts` populated for the first time:
+   `BATCH_CREATE`/`BATCH_LIST`/`BATCH_GET` (`resourceType: ORG`),
+   `BATCH_UPDATE` (`resourceType: BATCH`). No `BATCH_DELETE` entry - delete
+   stays on `requireRole(SUPER_ADMIN, ADMIN)` directly.
+5. `app/user-permissions/` - `POST /` (grant, branches validation on the
+   target group's own `type` - `general` rejects a `resourceId`, `org`
+   ignores any client-supplied one and always uses the granter's own org,
+   `batch` requires one and validates it against a real batch in the
+   granter's org, `course` 400s as not-supported-yet since no courses
+   module exists) and `GET /?userId=` (list, org-boundary checked). Both
+   require the target/queried user to belong to the caller's own org.
+6. `app/batches/` - `POST /`, `GET /`, `GET /:id`, `PATCH /:id` all through
+   `checkPermission`; `DELETE /:id` through `requireRole` directly.
+   `orgId`/`createdByUserId` on create are always server-derived from
+   `req.user`, never client-supplied - blocks cross-org creation
+   regardless of role or any grant. `GET /:id` 404s (not 403s) for a batch
+   in another org, to avoid leaking cross-org existence.
+7. Both new routers mounted in `app.ts` at `/api/v1/user-permissions` and
+   `/api/v1/batches`.
+8. Controllers follow the `if (!req.user) throw new UnauthorizedError(...)`
+   convention already established in `users.create-admin.controller.ts`
+   (checked before writing, rather than defaulting to `req.user!`).
+
+PART 4: Verification
+----------------------
+`pnpm --filter @platform/dal build` and `pnpm --filter platform-backend
+typecheck`/`lint` all ran clean. No live Postgres/.env in this environment
+(same as every session so far) - the plan documents the manual end-to-end
+verification steps (seed super_admin -> org/admin -> access identifiers +
+config groups for BATCH_CREATE/BATCH_UPDATE -> grant a faculty
+BATCH_CREATE -> confirm 201 vs. 403 for an ungranted faculty -> grant
+BATCH_UPDATE scoped to the created batch -> confirm PATCH works only for
+that grant -> confirm DELETE 403s for any faculty, 200s for admin) for
+whenever a DB is available; not run this session.
+
+PART 5: Architecture skill + this summary
+---------------------------------------------
+Updated `.claude/skills/architecture/SKILL.md`:
+- "Auth & RBAC middleware (PB)" rewritten - `checkPermission` now described
+  with its real resource-scoped check and `resolveResourceId` param, not
+  the old bypass-only/blocked description.
+- New "user_permissions grant module (PB)" and "Batches module (PB)"
+  subsections documenting both new modules, their route-by-route
+  authorization, and the P_O-for-create/P_B-for-update design reasoning.
+- "Still open" list's old "Resource-scoped RBAC... blocked on
+  user_permissions" bullet removed (no longer true) and replaced with three
+  narrower follow-ups: no `user_permissions` revoke endpoint, no courses
+  module (so `course`-scoped grants stay rejected), and no guided "assign
+  faculty to batch" flow beyond the raw grant API.
+
+PART 6: Follow-up fix (user-caught, same day)
+--------------------------------------------------
+User caught that `app/batches/batches.routes.ts` called
+`checkPermission("BATCH_CREATE")` etc. with retyped raw string literals,
+even though `permissions.constants.ts`'s own comments already document the
+intended convention: reference `PERMISSIONS.SOME_ID.identifier`, never
+retype the string. Missed this when wiring the routes in PART 3.
+
+Fixed all four call sites in `batches.routes.ts` to
+`checkPermission(PERMISSIONS.BATCH_CREATE.identifier)` (and
+`BATCH_LIST`/`BATCH_GET`/`BATCH_UPDATE`). Confirmed this still typechecks
+against `checkPermission`'s `PermissionId` parameter: `PERMISSIONS` is
+declared `as const satisfies Record<...>`, and `satisfies` only validates
+assignability without widening the checked expression's type, so
+`.identifier` keeps its narrow literal type (`"BATCH_CREATE"`, not
+`string`) straight through. `pnpm --filter platform-backend
+typecheck`/`lint` both still clean after the change.
+
+Updated `.claude/skills/architecture/SKILL.md`'s "Auth & RBAC middleware
+(PB)" section to state this calling convention explicitly (with the
+`PERMISSIONS.BATCH_CREATE.identifier` vs. `"BATCH_CREATE"` example) so
+future delegable modules don't repeat the same miss.
+
+Still open / not yet discussed:
+- `user_permissions` revoke endpoint.
+- Courses module (mirrors `app/batches/`) - needed before `course`-scoped
+  grants can be supported, and before course-sessions/attendance-session
+  flow can start.
+- A guided "FTA assigns faculty to batch with P_B" flow - the raw
+  grant + check both exist now, nothing higher-level yet.
+- Live end-to-end smoke test against a real Postgres - still not performed
+  across any session so far, see PART 4.
+- Everything else already listed as open in the architecture skill (FT
+  folder structure, testing strategy, CI, local dev docker-compose, trace
+  backend, LAG/LALW SQS trace propagation, sampling strategy).
+
+PART 7: "Go to Definition" fix + prod/dev sourcemap split (same day)
+--------------------------------------------------------------------------
+User asked why cmd-clicking a `@platform/*` import landed in the compiled
+`dist/*.js` instead of the real `src/*.ts`.
+
+Investigated rather than guessed: `dist/` for every package had
+`index.d.ts`/`index.js`/`index.js.map` but no `index.d.ts.map` (declaration
+map) - without one, an IDE can resolve the `.d.ts` (via package.json's
+`types` field) but can't bridge further into real source. First fix attempt
+(`tsup.config.ts` with `dts: { sourcemap: true }`) silently did nothing -
+checked tsup's actual `DtsConfig` type in
+`node_modules/tsup/dist/index.d.ts` and confirmed it has no `sourcemap`
+option at all; tsup does not support declaration maps, full stop.
+
+Pivoted to the actual working fix: TypeScript path mapping.
+`packages/tsconfig/base.json` now sets `baseUrl: "."` and
+`paths: { "@platform/*": ["../*/src/index.ts"] }` - resolved relative to
+`base.json`'s own directory regardless of which tsconfig extends it, so one
+entry covers every consumer. This is IDE/typecheck-only; runtime resolution
+via `node_modules` is untouched. Applying it surfaced a real conflict:
+every package's `"rootDir": "src"` started throwing TS6059 once `paths`
+pulled a sibling package's `src/index.ts` into the same `tsc` program -
+fixed by dropping `rootDir` everywhere (11 tsconfig.json files) since it
+only mattered for `tsc`'s own emission, which never actually happens
+(`--noEmit` always; tsup does the real build, ignoring `tsc`'s output
+settings).
+
+Separately, user asked for prod builds to stay optimized while local builds
+keep sourcemaps. All 10 `@platform/*` packages got a `tsup.config.ts`
+(replacing the inline CLI flags, `"build": "tsup"` now) with
+`sourcemap: process.env.NODE_ENV !== "production"` - on by default (local
+dev), off when `NODE_ENV=production` is set at build time. `dts: true`
+stays unconditional (internal consumers always need types regardless of
+environment). Did not add `minify` - wasn't asked for, and minifying
+without sourcemaps would make production stack traces unreadable with no
+resolution path, a real regression not worth introducing unprompted.
+
+Full `pnpm -r run build` and `pnpm -r run lint` both clean afterward.
+Updated `.claude/skills/architecture/SKILL.md`'s "Build tooling" section
+with the corrected tsup.config.ts shape, the declaration-map dead end (so
+no one retries it), and the `paths`/`rootDir` fix.
+
+PART 8: Batch access roster (same day)
+--------------------------------------
+User asked for the batch list/get API to expose, per batch: (1) which
+batch-scoped actions the calling faculty/admin can perform, and (2) who
+else (admins + faculty) has access and what they can do - clarifying "view"
+is already universal and out of scope for this.
+
+Two clarifying questions asked and resolved before implementing:
+1. "Edit, delete" was illustrative, not a scope change - delete stays
+   admin-only/`requireRole`, no `BATCH_DELETE` permission id. Only
+   `BATCH_UPDATE` is a real batch-scoped delegable action today.
+2. The roster includes every org admin (implicit access via bypass, not a
+   grant) AND every user with an explicit batch-scoped grant - user chose
+   the more literal/inclusive reading over "admins are redundant, omit
+   them."
+
+Implementation:
+1. New DAL: `userPermissionsRepository.listAccessIdentifiersGrantedForResources`
+   (`packages/dal/src/repositories/user-permissions.repository.ts`) - bulk
+   variant of `userHasAccessIdentifier`'s 3-table join, taking `resourceIds:
+   number[]` instead of one id, so a whole list response resolves grants in
+   one query instead of N. `usersRepository.findUsersByIds` added
+   (`users.repository.ts`) for bulk grantee-display-info lookup.
+2. New `app/batches/services/batches.access-roster.service.ts` -
+   `resolveBatchAccess(batchIds, caller)` returns a `Map<batchId,
+   BatchAccess>` in a small fixed number of queries total (admin roster +
+   grant rows, each fetched once and reused across every batch id), grouped
+   in-memory (`resourceId -> userId -> identifiers[]`). `mine` is computed
+   generically off every `PERMISSIONS` entry with `resourceType: BATCH`
+   (not hardcoded to `BATCH_UPDATE`), so a future batch-scoped permission
+   is picked up automatically. `AccessRosterUser` is a minimal projection
+   (`id`/`identifier`/`alias`/`role`) - deliberately not the full `SafeUser`
+   shape, since this is visible to any admin/faculty who can view the
+   batch, not just super_admin-tier managers.
+3. `batches.list.service.ts`/`batches.get.service.ts` now take the full
+   caller (`userId`/`orgId`/`role`, not just `orgId`) and attach `access` to
+   every returned batch. Controllers updated to pass `req.user.role` through
+   (previously only `userId`/`orgId` were threaded to services).
+
+`pnpm --filter @platform/dal build` and `pnpm --filter platform-backend
+typecheck`/`lint` all clean. Updated the architecture skill's "Batches
+module (PB)" section with the full roster shape and query-count reasoning.
+
+PART 9: Access roster simplification (user-requested, same day)
+--------------------------------------------------------------------
+User pushed back on PART 8's `resolveBatchAccess` as overcomplicated
+(generic per-identifier `mine`/`grants` computation, a separate
+grantee-info bulk fetch, nested Map-of-Maps grouping) and asked for an
+easier version, describing the algorithm directly: list batches -> list org
+admins -> list org faculty -> bulk-check which faculty can edit each batch
+-> respond with admins + faculty (faculty carrying a plain `canEdit`
+boolean), no special-casing of "the current user" at all (frontend finds
+itself in the lists by matching its own id).
+
+Implemented exactly that:
+1. DAL: `listAccessIdentifiersGrantedForResources` (generic, returned every
+   identifier per grant) replaced with
+   `listGranteeIdsForAccessIdentifier` (`user-permissions.repository.ts`) -
+   filters by one specific `identifier` directly in the query, returns bare
+   `(resourceId, userId)` pairs. `findUsersByIds` (`users.repository.ts`)
+   deleted - no longer needed once faculty display info comes straight from
+   `listUsersByRole` instead of a separate grantee lookup.
+2. `resolveBatchAccess(batchIds, orgId)` rewritten - drops the `caller`
+   parameter entirely (was `{ userId, orgId, role }`, now just `orgId`).
+   Three queries total (admins, faculties, edit-grants), one in-memory
+   `userId -> Set<batchId>` grouping, output is
+   `{ admins: AccessRosterUser[], faculties: (AccessRosterUser &
+   { canEdit: boolean })[] }` - full faculty roster every time (not a
+   sparse "who has a grant" list), `canEdit` hardcoded to `BATCH_UPDATE`
+   rather than a generic identifiers array.
+3. `batches.list.service.ts`/`batches.get.service.ts` and their controllers
+   reverted to taking/passing plain `orgId` (the `userId`/`role` threading
+   added in PART 8 is gone - no longer needed anywhere).
+
+`pnpm --filter @platform/dal build` and `pnpm --filter platform-backend
+typecheck`/`lint` all clean. Updated the architecture skill's access-roster
+section to match - explicitly notes the earlier generic version was tried
+and simplified away, so a future reader doesn't reintroduce it.
+
+Still open / not yet discussed (in addition to PART 6's list):
+- `BATCH_DELETE`/faculty delete - explicitly out of scope, confirmed twice
+  now (PART 1 and PART 8).
+- Whether the access roster should also appear on `POST`/`PATCH` responses
+  (currently only `GET /` and `GET /:id`) - not asked, not added.
+- No visibility restriction was placed on the roster (any admin/faculty who
+  can view the batch sees the full faculty/canEdit list) - not explicitly
+  asked about; flagged here in case that turns out to be unwanted.
+- If a second batch-scoped permission is ever added (e.g. a delegable
+  delete), the roster's `faculties` shape needs a new boolean field
+  (`canDelete`, etc.) added by hand - PART 9 deliberately moved away from
+  the generic/auto-extending version, so this won't happen automatically.

@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, text, unique } from "drizzle-orm/pg-core";
+import { pgTable, serial, varchar, text, unique, index } from "drizzle-orm/pg-core";
 import type { PermissionScope } from "@platform/permissions";
 import { timestamps } from "./timestamps";
 
@@ -34,5 +34,6 @@ export const adminPermissionsConfigGroups = pgTable(
       table.type,
     ),
     uqIdType: unique(ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS.UQ_ID_TYPE.key).on(table.id, table.type),
+    idxType: index("idx__admin_permissions_config_groups__type").on(table.type),
   }),
 );

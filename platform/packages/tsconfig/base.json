@@ -14,6 +14,16 @@
     "declarationMap": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    // tsup doesn't support declaration-map (.d.ts.map) generation at all
+    // (checked its DtsConfig type - no sourcemap option exists), so without
+    // this, "Go to Definition" on a @platform/* import stops at dist/*.js
+    // instead of the real src/*.ts. Resolved relative to THIS file (base.json's
+    // own directory, packages/tsconfig/) regardless of which tsconfig extends
+    // it, so one entry here covers every consumer.
+    "baseUrl": ".",
+    "paths": {
+      "@platform/*": ["../*/src/index.ts"]
+    }
   }
 }

@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, varchar, unique, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, varchar, unique, foreignKey, index } from "drizzle-orm/pg-core";
 import type { PermissionScope } from "@platform/permissions";
 import { users } from "./users";
 import { adminPermissionsConfigGroups } from "./admin-permissions-config-groups";
@@ -40,5 +40,18 @@ export const userPermissions = pgTable(
     uqUserGroupResource: unique(USER_PERMISSIONS_CONSTRAINTS.UQ_USER_GROUP_RESOURCE.key)
       .on(table.userId, table.adminPermissionsConfigGroupId, table.resourceId)
       .nullsNotDistinct(),
+    // Backs listGranteeIdsForAccessIdentifier's WHERE resourceType = ? AND
+    // resourceId IN (...) - not covered by the unique index above since
+    // that one is keyed off userId first, not resourceId.
+    idxResourceTypeResourceId: index("idx__user_permissions__resource_type__resource_id").on(
+      table.resourceType,
+      table.resourceId,
+    ),
+    // No separate index on userId alone - uqUserGroupResource's own
+    // unique() constraint leads with userId, so its index already serves
+    // leftmost-prefix lookups on userId.
+    idxAdminPermissionsConfigGroupId: index("idx__user_permissions__admin_permissions_config_group_id").on(
+      table.adminPermissionsConfigGroupId,
+    ),
   }),
 );
