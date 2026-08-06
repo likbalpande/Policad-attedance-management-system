@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "tsx watch src/instrumentation.ts",
+    "generate-keypair": "tsx scripts/generate-keypair.ts",
     "prebuild": "pnpm run typecheck",
     "build": "tsup src/instrumentation.ts --format cjs --sourcemap --clean",
     "start": "node dist/instrumentation.js",

@@ -784,3 +784,15 @@ The UI theme needs to be minimal and in the light mode.
      The theme will be managed in the standard way as done in any production setup. Make sure that UI should not look ai generated
      with those common bluish purple theme at all. It should look like a polished, clean, modern and responsive application.
 ---
+[2026-08-06T20:11:35.258Z] USER_MESSAGE
+are we having seperate frontend routes for admin+faculties, super-admin, students login?
+---
+[2026-08-06T20:14:55.995Z] USER_MESSAGE
+how to generate and store priavte and pulic keys for my .env in PB?
+---
+[2026-08-06T20:17:17.261Z] QUESTION
+Q: How should the RSA keypairs be generated?
+Selected: Reusable Node script (Recommended)
+Q: RSA key size for both keypairs (JWT_ACCESS + ORIGIN_SIGN)?
+Selected: 2048-bit (Recommended)
+---

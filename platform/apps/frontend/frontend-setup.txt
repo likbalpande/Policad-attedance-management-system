@@ -47,11 +47,29 @@ already centralized by construction (axios instances, TanStack Query, RHF).
 platform/apps/frontend/
   src/
     app/
-      student/        (FTS)      <feature>/{pages,components}
-      faculty/         (FTF)     "
-      admin/            (FTA)    "
-      super-admin/        (FTSA) "
-      shared/               - login, unauthorized, 404, actor-agnostic pages
+      super-admin/        (FTSA)   <feature>/{pages,components} - org/admin creation,
+                                    permission config - genuinely single-actor, mirrors
+                                    PB's super-admin aggregator
+      staff/            (FTA+FTF)  <feature>/{pages,components} - batches, courses,
+                                    students, sessions, attendance - ONE tree for admin
+                                    + faculty, not split, because PB itself doesn't
+                                    split these (same endpoints, checkPermission bypass
+                                    roles) - pages gate actions internally via
+                                    @platform/permissions + the canEdit roster flags
+                                    PB already returns, not via separate route trees
+      student/                (FTS) <feature>/{pages,components} - view-only
+                                    enrollment/attendance, QR scan - separate tree,
+                                    genuinely different feature set + login mechanic
+      auth/
+        staff-login/                - route: /login - one form, covers super_admin +
+                                       admin + faculty (same PB login endpoint);
+                                       role comes back in the token, decides
+                                       post-login redirect (/super-admin or /staff)
+        student-login/               - route: /student/login - separate flow
+                                       (password-only, no OTP) since PB's student
+                                       login is a genuinely different endpoint/rules.
+                                       Only login route surfaced on native builds.
+      shared/                        - unauthorized, 404
     api/
       <resource>.api.ts         - raw axios calls, one file per backend resource
       <resource>.queries.ts       - TanStack Query hooks wrapping the .api.ts fns
@@ -88,9 +106,17 @@ platform/apps/frontend/
   package.json
   ios/ android/                    - generated via `cap add`
 ```
-Mirrors PB's actor-tier convention (app/<actor>/<module>) for cross-app mental-model
-consistency. `shared/` and `components/`/`hooks/`/`lib/` hold everything not scoped
-to one actor.
+Mirrors PB's actor-tier convention more precisely than a flat 1:1 actor mapping would:
+PB only groups a module under an actor-tier folder when every route in it is scoped to
+a single actor (super-admin's org/admin/permission-config modules); a module whose
+routes span multiple actor tiers (batches, courses, ...) stays ungrouped with
+per-route requireRole/checkPermission granularity instead. `app/staff/` is FT's
+equivalent of that - admin and faculty share it because PB's own batches/courses/
+attendance endpoints are shared, not actor-split. Route guarding: RequireRole wraps
+each top-level tree (`/super-admin/*` -> super_admin, `/staff/*` -> admin|faculty,
+`/student/*` -> student); wrong-role access redirects to /unauthorized, not to login,
+since the user is authenticated - just the wrong tier. `shared/`, `components/`,
+`hooks/`, `lib/` hold everything not scoped to one actor.
 
 `api/` is organized by **backend resource, not by FT actor** - a delegable resource
 like `batches` is one file pair used by both FTA and FTF (same PB endpoint, gated by
