@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS postgis;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "admin_access_identifiers" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"identifier" varchar(50) NOT NULL,
@@ -199,7 +201,7 @@ CREATE TABLE IF NOT EXISTS "attendances" (
 	"location_info" jsonb,
 	"location_lat" double precision,
 	"location_long" double precision,
-	"location_point" "geography(Point, 4326)",
+	"location_point" geography(Point, 4326),
 	"scanned_at" timestamp with time zone,
 	"remarked_by_user_id" integer,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -218,7 +220,7 @@ CREATE TABLE IF NOT EXISTS "attendance_history" (
 	"location_info" jsonb,
 	"location_lat" double precision,
 	"location_long" double precision,
-	"location_point" "geography(Point, 4326)",
+	"location_point" geography(Point, 4326),
 	"scanned_at" timestamp with time zone,
 	"remarked_by_user_id" integer,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
