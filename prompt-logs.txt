@@ -920,3 +920,50 @@ is it done?
 [2026-08-06T21:14:04.570Z] USER_MESSAGE
 yes
 ---
+[2026-08-06T21:15:48.031Z] USER_MESSAGE
+how to fix this now in pgadmin?
+
+[Image #1]
+---
+[2026-08-06T21:16:52.266Z] USER_MESSAGE
+can we not add a postgres role as well?
+---
+[2026-08-07T05:06:18.224Z] USER_MESSAGE
+lets start with the full folder structure setup and the implementation - but only for the super-admin login functionality right now.
+---
+[2026-08-07T05:43:27.285Z] QUESTION
+Q: How should the shadcn/ui primitives (Button, Input, Label, Card, Form) needed for the login page be set up?
+Selected: Official shadcn CLI (Recommended)
+Q: Capacitor native projects (ios/android): generate them now via `cap add`, or defer?
+Selected: Defer (Recommended)
+Q: After a successful login, if the returned role is admin/faculty (not super_admin) - the staff/ route tree doesn't exist yet in this login-only scope - where should the user land?
+Selected: Do it for super-admin, admin and staff (admin and staff almost go hand in hand)
+Q: For end-to-end verification (actually logging in), do you have Primary Backend (PB) runnable locally right now (DB configured, .env set up, OTP email delivery working)?
+Selected: Yes, I can run PB locally
+---
+[2026-08-07T14:51:22.173Z] USER_MESSAGE
+are we not creating components separetly in packages so that in future, if another frontend is to be made seperately, then we can do it in easier way without repeating componets ?
+---
+[2026-08-07T14:52:55.453Z] QUESTION
+Q: Is there a concrete second frontend app planned (separate deployable, not just another route tree in the same Capacitor app)?
+Selected: No, not planned yet (Recommended)
+---
+[2026-08-07T15:00:33.135Z] USER_MESSAGE
+why are we not storing every api seperate file and every query in seperate file? WIth growing code it will become huge, we can also group them if required by super-admin, admin, faculty, student
+isn't it?
+---
+[2026-08-07T15:04:40.744Z] USER_MESSAGE
+we can go with proposed structure
+Proposed structure
+---
+[2026-08-07T15:47:59.319Z] USER_MESSAGE
+is doen't redirect students?
+redirect(homePathFor(user.role));
+---
+[2026-08-07T15:48:45.821Z] QUESTION
+Q: homePathFor's binary ternary is correct today but not exhaustive - harden it now or leave it since student login isn't built yet?
+Selected: Harden now (Recommended)
+---
+[2026-08-07T15:50:03.534Z] USER_MESSAGE
+are we usng tailwind v4?
+---

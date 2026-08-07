@@ -71,8 +71,17 @@ platform/apps/frontend/
                                        Only login route surfaced on native builds.
       shared/                        - unauthorized, 404
     api/
-      <resource>.api.ts         - raw axios calls, one file per backend resource
-      <resource>.queries.ts       - TanStack Query hooks wrapping the .api.ts fns
+      <resource>.api.ts         - raw axios call, one file per endpoint/action -
+      <resource>.queries.ts       once a resource has >1 action it becomes a folder
+                                   (mirrors PB's own controller/service split, e.g.
+                                   auth.staff-login.controller.ts, auth.refresh.
+                                   controller.ts, ... - one file per action, not one
+                                   file per resource)
+      auth/
+        request-otp.api.ts / request-otp.queries.ts
+        staff-login.api.ts / staff-login.queries.ts
+        refresh.api.ts             - no .queries.ts, only auth-refresh.ts's
+                                      interceptor calls this, never a user mutation
       super-admin/
         organizations.api.ts / organizations.queries.ts
         users.api.ts / users.queries.ts
@@ -119,13 +128,22 @@ since the user is authenticated - just the wrong tier. `shared/`, `components/`,
 `hooks/`, `lib/` hold everything not scoped to one actor.
 
 `api/` is organized by **backend resource, not by FT actor** - a delegable resource
-like `batches` is one file pair used by both FTA and FTF (same PB endpoint, gated by
-different permissions), matching how PB itself only nests non-delegable modules under
-`super-admin/`. Pages/components import only from `.queries.ts`, never call `.api.ts`
-functions directly - keeps loading/error/cache state consistent through TanStack Query.
-Almost every `<resource>.api.ts` calls `pbClient`; only the attendance-marking submit
-call (FTS scanning flow) calls `lagClient` - keep that one isolated in its own
-`api/attendance-marking.api.ts` rather than mixed into a PB-backed file.
+like `batches` is used by both FTA and FTF (same PB endpoint, gated by different
+permissions), matching how PB itself only nests non-delegable modules under
+`super-admin/`. Actor-grouping (`super-admin/`) only applies when *every* route for
+that resource is single-actor-scoped - never split a shared/delegable resource across
+actor folders (would mean arbitrarily picking an owner, or duplicating the same axios
+call). Within a resource, one file per endpoint/action once there's more than one -
+mirrors PB's own controller/service granularity (`auth.staff-login.controller.ts` vs
+`auth.refresh.controller.ts`, not one `auth.controller.ts`) rather than letting a
+single `<resource>.api.ts` grow to hold every action as PB gains endpoints. A resource
+with a genuinely single endpoint can stay a flat `<resource>.api.ts`/`.queries.ts`
+pair; split into a folder as soon as a second action shows up. Pages/components import
+only from `.queries.ts`, never call `.api.ts` functions directly - keeps loading/error/
+cache state consistent through TanStack Query. Almost every `<resource>.api.ts` calls
+`pbClient`; only the attendance-marking submit call (FTS scanning flow) calls
+`lagClient` - keep that one isolated in its own `api/attendance-marking.api.ts` rather
+than mixed into a PB-backed file.
 
 ## Config notes
 - tsconfig.json extends @platform/tsconfig/base.json, overrides module/moduleResolution

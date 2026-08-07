@@ -614,13 +614,37 @@ directly, same as PB.
 
 Vite + React + TS + Capacitor, one codebase serving both desktop-browser use
 (admin/faculty/super-admin) and the native student mobile app. Stack: Tailwind
-+ shadcn/ui, React Router v7, TanStack Query + axios, Zustand (auth/session
-only), React Hook Form + Zod. Folder structure mirrors PB's actor-tier
-convention (`app/<actor>/<module>`: student/faculty/admin/super-admin, plus a
-`shared/` for actor-agnostic pages). Full rationale and the complete folder
-tree live in `platform/apps/frontend/frontend-setup.txt` - treat that as the
-authoritative FT-specific spec, same relationship PB's
+v4 + shadcn/ui, React Router v7 (data router, `createBrowserRouter`), TanStack
+Query + axios (two instances - `pbClient`/`lagClient` - sharing one
+single-flight refresh queue), Zustand (auth/session only). Folder structure is
+actor-tier but **not** a flat 1:1 actor mapping - `app/staff/` merges
+admin+faculty into one tree (PB itself doesn't split these at the API level),
+`app/super-admin/` and `app/student/` stay separate. Full rationale and the
+complete folder tree live in `platform/apps/frontend/frontend-setup.txt` -
+treat that as the authoritative FT-specific spec, same relationship PB's
 `backend-folder-structure-prompt.txt` has to this skill.
+
+Two build/runtime gotchas hit while scaffolding the first real feature (staff
+login), worth knowing before extending FT further:
+
+- **Workspace packages need `optimizeDeps.include` in `vite.config.ts`.**
+  `@platform/*` packages build to CJS via tsup. Vite serves pnpm-linked
+  workspace packages via `/@fs/` as source, which skips its CJS->ESM
+  named-export interop - `import { USER_ROLE } from "@platform/permissions"`
+  fails at runtime ("does not provide an export named...") unless the package
+  is force-included in `optimizeDeps.include` so esbuild pre-bundles it
+  properly. Any new `@platform/*` dependency FT adds needs the same treatment.
+- **Rehydrate the auth session *before* the router is constructed, not in a
+  router loader.** `createBrowserRouter` fires loaders for the initial route
+  as soon as it's constructed - not when `<RouterProvider>` mounts - and
+  React Router v7 runs parent/child loaders in parallel, not parent-then-child.
+  A root-route loader that awaits `authStorage.getTokens()` does **not**
+  reliably finish before a child route's synchronous `requireRole` check reads
+  the store, causing a real race (observed: an authenticated wrong-role user
+  bounced through `/login` instead of landing straight on `/unauthorized`).
+  Fix: `main.tsx` awaits rehydration and only *then* dynamically imports `App`
+  (and therefore `routes/router.tsx`), so the store is already correct before
+  the router - and its loaders - are created at all.
 
 ## Cross-cutting conventions (all HTTP-serving apps)
 

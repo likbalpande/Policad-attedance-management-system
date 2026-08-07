@@ -1,0 +1,136 @@
+FT SCAFFOLD + SUPER-ADMIN/STAFF LOGIN IMPLEMENTATION - 2026-08-07
+
+OBJECTIVE:
+Scaffold the full FT base app (platform/apps/frontend, per frontend-setup.txt)
+and implement one real feature end-to-end: staff login (shared OTP/password
+endpoint covering super_admin, admin, faculty) for both the super-admin and
+staff (merged admin+faculty) route trees. Student login and all non-auth
+feature modules explicitly out of scope.
+
+APPROACH:
+Plan-mode research (2 Explore agents: PB auth contract, monorepo scaffolding
+conventions) -> 1 Plan agent for the detailed file-by-file implementation
+design -> AskUserQuestion on 4 open decisions -> approved plan -> direct
+implementation.
+
+USER DECISIONS LOCKED IN BEFORE BUILDING:
+1. shadcn/ui via official CLI, not hand-rolled.
+2. Capacitor: add config + core/preferences deps now, defer `cap add
+   ios/android` (no native toolchain needed to test login in-browser).
+3. Both super-admin AND staff (admin+faculty merged) logins in scope, not
+   just super-admin - redirect by role: super_admin -> /super-admin,
+   admin|faculty -> /staff. Student excluded entirely.
+4. PB run locally for a real end-to-end verification pass, not just
+   build/lint/typecheck.
+
+WHAT WAS BUILT:
+- Full root scaffold: package.json, tsconfig.json (single-file, overrides
+  @platform/tsconfig/base.json's CJS defaults for the browser target),
+  eslint.config.js, vite.config.ts, index.html, capacitor.config.ts,
+  .env(.example).
+- Tailwind v4 + shadcn CLI (newer CLI version than expected - flags/presets
+  differ from older shadcn docs: `--template vite --base radix --preset nova`,
+  no `form` component in this registry - hand-wrote the two login forms with
+  plain react-hook-form `register()` instead of shadcn's Form/Field wrapper,
+  simpler for two 1-field forms anyway).
+- Design tokens (styles/globals.css) reconciled from the CLI's generated
+  oklch defaults to frontend-setup.txt's literal hex values - background,
+  foreground, accent, destructive/success/warning, 8px card/input radius vs
+  6px button radius (hardcoded on Input/Card specifically, base --radius
+  drives Button's derived scale). Dropped next-themes (light-mode only, no
+  toggle), the CLI's default "shadcn" package dep (unused), and the Geist
+  font swap (kept Inter Tight + IBM Plex Mono per the doc).
+- lib/: pb-client.ts + lag-client.ts (lagClient genuinely unused this pass -
+  no LAG endpoints exist yet), auth-refresh.ts (shared single-flight refresh
+  queue), auth-storage.ts (Capacitor Preferences wrapper), query-client.ts,
+  toast.ts (sonner wrapper).
+- stores/auth.store.ts (zustand, no persist middleware - see bug #2 below),
+  routes/ (router.tsx, guards.ts, route-paths.ts), hooks/use-auth.ts.
+- api/auth.api.ts + auth.queries.ts (requestOtp, staffLogin, refreshTokens).
+- app/auth/staff-login/ (2-step email->code wizard), app/super-admin/dashboard
+  + app/staff/dashboard (placeholder pages proving the guards work),
+  app/shared/{unauthorized,not-found}.
+
+TWO REAL BUGS FOUND AND FIXED DURING LIVE BROWSER TESTING (not caught by
+typecheck/lint/build - both were runtime-only):
+
+1. Blank page, zero console output, zero errors. Root cause: Vite serves
+   pnpm-linked `@platform/*` workspace packages (built CJS via tsup) through
+   `/@fs/` as source, which skips Vite's CJS->ESM named-export interop -
+   `import { USER_ROLE } from "@platform/permissions"` failed at runtime with
+   "does not provide an export named 'USER_ROLE'", which is an ESM linking
+   error (not a thrown exception), so nothing in main.tsx's module graph ever
+   executed and nothing was logged anywhere. Fix: added
+   `optimizeDeps.include: ["@platform/permissions", "@platform/types",
+   "@platform/uai"]` to vite.config.ts, forcing them through esbuild's
+   pre-bundler. Documented in the architecture skill's FT section - any new
+   @platform/* dep FT adds needs the same treatment.
+
+2. Wrong-role redirect race: an authenticated faculty account hitting
+   /super-admin bounced through /login before landing on /staff, instead of
+   going straight to /unauthorized. Root cause: `createBrowserRouter` fires
+   loaders for the initial route as soon as the router object is
+   *constructed* (not when RouterProvider mounts), and React Router v7 runs
+   parent/child loaders in parallel, not parent-then-child - so an async root
+   loader awaiting Capacitor Preferences does not reliably finish before a
+   child route's synchronous requireRole check reads the store. Fix:
+   restructured main.tsx to await session rehydration first, then
+   dynamically `import("./App")` (and therefore routes/router.tsx) only
+   after - so the store is already correct before the router (and its
+   loaders) exist at all. Removed the now-unnecessary root loader/
+   HydrateFallback complexity from router.tsx. Documented in the architecture
+   skill.
+
+LIVE VERIFICATION (against PB running locally on :4000, two test accounts
+created directly in the DB - "FT Login Test Org" id=1, sa-test@policad.dev
+(super_admin) and faculty-test@policad.dev (faculty), both
+allow_password_login=true, password "TestPass123" - left in the DB for
+further manual testing, not cleaned up):
+- Super-admin: email -> OTP request (200) -> password as code -> redirect
+  /super-admin, dashboard shows "User #1 . super_admin", tokens in storage.
+- Faculty: same flow -> redirect /staff, "User #2 . faculty".
+- Cross-tier guard: faculty hitting /super-admin -> /unauthorized (not
+  /login), confirmed after bug #2 fix.
+- Logout: clears storage, redirects /login, hard refresh doesn't restore
+  session.
+- Hard refresh on /staff while logged out -> bounces to /login.
+- Refresh rotation: shrunk STAFF_ACCESS_TOKEN_TTL_SECONDS to 15s temporarily,
+  confirmed expired-token request -> exactly one POST /auth/refresh -> retry
+  succeeds, both tokens rotate. Restored TTL after.
+- Single-flight: 3 concurrent requests with an expired token -> exactly one
+  POST /auth/refresh, all 3 retried successfully.
+- Static: typecheck/lint (0 errors, 3 pre-existing warnings from shadcn's own
+  button.tsx + router.tsx's non-component exports)/build all pass.
+
+POST-VERIFICATION REFACTOR (user-prompted):
+User asked why api/ wasn't split one-file-per-endpoint and grouped by actor,
+given it'll grow. Noted PB itself already splits one-file-per-action (not
+per-resource) for its controllers/services (auth.staff-login.controller.ts,
+auth.refresh.controller.ts, ...), so FT's flat auth.api.ts/auth.queries.ts
+(3 functions in 2 files) didn't match that precedent. Actor-grouping stays
+exactly as already decided (only for genuinely single-actor resources -
+auth is used by 3 actors via one shared endpoint, so it doesn't qualify).
+Agreed structure: resource becomes a **folder** once it has >1 action, split
+by individual endpoint within, mirroring PB's controller/service split.
+Refactored api/auth.api.ts + api/auth.queries.ts (2 files) into api/auth/
+(5 files: request-otp.api/queries.ts, staff-login.api/queries.ts, refresh.api.ts
+- no .queries.ts for refresh, only called from lib/auth-refresh.ts's
+interceptor, never a user-triggered mutation). Updated all 3 consumer imports
+(email-step-form.tsx, otp-step-form.tsx, lib/auth-refresh.ts) and
+frontend-setup.txt's api/ section to document the per-endpoint-file rule for
+every future resource. Re-verified typecheck/lint/live browser render after.
+
+OUTPUT:
+- platform/apps/frontend/ - working scaffold + login feature, PB and FT dev
+  servers left running locally.
+- .claude/skills/architecture/SKILL.md - FT section updated: corrected the
+  stale actor-tier folder description, added the two gotchas above.
+- frontend-setup.txt - api/ convention updated to one-file-per-endpoint
+  within a resource folder (see above).
+
+NEXT STEPS:
+- Student login and all non-auth feature modules remain unbuilt (out of
+  scope this pass).
+- Capacitor native projects (`cap add ios/android`) still deferred.
+- Test org/accounts in the DB are disposable - drop them before any real
+  seed data is added.
