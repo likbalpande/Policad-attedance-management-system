@@ -1,0 +1,132 @@
+GRAFANA CLOUD OTLP ENDPOINT SETUP (PB) - 2026-08-07
+
+OBJECTIVE:
+Wire up the user's Grafana Cloud OTLP gateway credentials (provided as a
+generic auto-instrumentation NODE_OPTIONS/env snippet) so platform-backend
+traces actually ship to Grafana instead of just printing to stdout.
+
+APPROACH:
+Plan-mode research (1 Explore agent: locate .env files, existing OTEL
+wiring, start scripts, .gitignore) -> read the tracing package + backend
+entrypoint directly (trivial scope, skipped Plan agent) -> AskUserQuestion
+on the /v1/traces path-handling decision -> approved plan -> direct
+implementation.
+
+KEY FINDING:
+platform-backend already has programmatic OTel instrumentation via
+@platform/tracing's initTracing(), called explicitly from
+src/instrumentation.ts (the real entrypoint per package.json scripts). This
+differs from the generic NODE_OPTIONS="--require .../register" pattern in
+the user's snippet, which is the env-var-driven *auto*-instrumentation
+approach. Of the 6 env vars supplied, only 2 actually do anything here:
+  - OTEL_EXPORTER_OTLP_ENDPOINT - already read by env.config.ts
+  - OTEL_EXPORTER_OTLP_HEADERS - not passed explicitly to OTLPTraceExporter
+    in init.ts, so the OTel SDK auto-falls-back to reading it from
+    process.env itself for auth
+The other 4 (OTEL_SERVICE_NAME, OTEL_EXPORTER_OTLP_PROTOCOL,
+OTEL_TRACES_EXPORTER, OTEL_NODE_RESOURCE_DETECTORS) are no-ops given the
+current manual-construction code path, and NODE_OPTIONS --require would
+double-instrument if added alongside the existing initTracing() call - so
+none of those 4 were added.
+
+Also found: OTLPTraceExporter's `url` config is used as-is with no
+`/v1/traces` suffix auto-append (that only happens when the SDK builds the
+URL itself from the bare env var, not when `url` is passed explicitly as
+init.ts does). Grafana's gateway needs that suffix for trace ingestion.
+
+USER DECISION LOCKED IN:
+Fix the /v1/traces suffixing in code (packages/tracing/src/init.ts) rather
+than baking the full signal-specific path into the .env value - keeps
+OTEL_EXPORTER_OTLP_ENDPOINT spec-compliant as a base URL, future-proofs for
+metrics/logs exporters later.
+
+WHAT WAS BUILT:
+- platform/packages/tracing/src/init.ts: OTLPTraceExporter now built with
+  `${options.otlpEndpoint}/v1/traces`.
+- platform/apps/platform-backend/src/config/env.config.ts: added
+  OTEL_EXPORTER_OTLP_HEADERS as an optional zod field (not passed through
+  explicitly - just needs to exist in process.env for the exporter's own
+  fallback to see it).
+- platform/apps/platform-backend/.env: set OTEL_EXPORTER_OTLP_ENDPOINT to
+  the Grafana gateway base URL and OTEL_EXPORTER_OTLP_HEADERS to the
+  Authorization: Basic header with the user's supplied token.
+- platform/apps/platform-backend/.env.example: added the matching blank
+  placeholder keys.
+
+NOT DONE / OUT OF SCOPE:
+- live-attendance-gateway and live-attendance-lambda-worker are empty,
+  unscaffolded directories - nothing to configure there yet.
+
+FOLLOW-UP 1 - RESOURCE ATTRIBUTES FOR GRAFANA'S CONNECTION CHECK:
+User ran the connection test in Grafana's Application Observability setup;
+it queries Tempo with
+{resource.service.name="policad-platform-backend" &&
+resource.service.namespace="policad" &&
+resource.deployment.environment="testing"} - none of which init.ts was
+setting except service.name (and even that was wrong: hardcoded
+"platform-backend", not "policad-platform-backend").
+- Added serviceNamespace/deploymentEnvironment to InitTracingOptions,
+  merged into the OTel resource via ATTR_SERVICE_NAMESPACE (stable,
+  importable) and a manually inlined "deployment.environment" string
+  (its ATTR_ constant only lives in
+  @opentelemetry/semantic-conventions/incubating, which this repo's shared
+  moduleResolution:"node" tsconfig can't resolve types for - not worth a
+  monorepo-wide tsconfig change for one constant).
+- User asked mid-task to make serviceNamespace env-driven too (not
+  hardcoded "policad") - added OTEL_SERVICE_NAMESPACE alongside the new
+  OTEL_DEPLOYMENT_ENVIRONMENT, both optional zod fields, both read in
+  instrumentation.ts and set in .env/.env.example.
+- service.name hardcoded to "policad-platform-backend" in
+  instrumentation.ts to match what Grafana's onboarding flow registered.
+
+FOLLOW-UP 2 - LOGS EXPORT (WINSTON -> OTLP):
+User noticed Grafana showed "connected" but Logs view was empty. Root
+cause: only traces were ever wired up; no OTel logs pipeline existed at
+all. @opentelemetry/instrumentation-winston (already active via
+getNodeAutoInstrumentations, not in the DISABLED list) does log
+correlation (trace_id/span_id injection) by default, but log SENDING is a
+silent no-op without both (a) a registered LoggerProvider and (b) the
+@opentelemetry/winston-transport package, which was not installed anywhere
+in the repo.
+
+Researched via 1 Explore agent (packages/logger's winston setup + init
+ordering, instrumentation-winston's actual send-vs-correlate behavior by
+version, NodeSDK's logRecordProcessors config support, and which OTel log
+packages were already present transitively) before proposing the fix -
+confirmed init order is already correct (winston is only ever require()'d
+downstream of instrumentation.ts's deferred `import("./server")`, after
+initTracing() has run).
+
+USER DECISION LOCKED IN:
+No ConsoleLogRecordExporter fallback when otlpEndpoint is unset (unlike
+traces) - winston's own Console transport already prints formatted JSON
+logs locally; an OTel console dump on top would just duplicate every line
+in a rawer format.
+
+WHAT WAS BUILT:
+- platform/packages/tracing/package.json: added @opentelemetry/sdk-logs,
+  @opentelemetry/exporter-logs-otlp-http, @opentelemetry/api-logs (all
+  ^0.221.0, matching the existing OTel version train) and
+  @opentelemetry/winston-transport (^0.31.0, genuinely new to the tree -
+  required for instrumentation-winston's internal log-sending require() to
+  succeed).
+- platform/packages/tracing/src/init.ts: builds OTLPLogExporter at
+  `${otlpEndpoint}/v1/logs`, wrapped in Batch/SimpleLogRecordProcessor
+  (mirroring the existing span-processor-mode switch), passed via
+  `logRecordProcessors` on NodeSDK - confirmed NodeSDK auto-registers the
+  global LoggerProvider from this option, no manual
+  logs.setGlobalLoggerProvider() call needed. Processor array stays empty
+  (no exporter constructed at all) when otlpEndpoint is unset.
+  Also hit a real API-shape gotcha: this installed sdk-logs version's
+  Simple/BatchLogRecordProcessor take `{ exporter }` as a single options
+  object, not the exporter as a bare positional arg (unlike
+  sdk-trace-base's span processors) - fixed post-typecheck.
+- No .env/.env.example changes needed - reuses the same
+  OTEL_EXPORTER_OTLP_ENDPOINT + OTEL_EXPORTER_OTLP_HEADERS already set.
+
+VERIFICATION DONE:
+pnpm install, typecheck (both packages/tracing and platform-backend clean),
+tsup build succeeded, pnpm dev boot with no OTel startup errors, one real
+HTTP request handled and logged locally with no exceptions. Actual arrival
+in Grafana's Logs explorer left for the user to visually confirm (batch
+flush is timer-based, didn't wait it out in the smoke test).

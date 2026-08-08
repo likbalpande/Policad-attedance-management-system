@@ -34,6 +34,20 @@ const envSchema = z.object({
     // (see @platform/tracing). Point at any OTLP-compatible collector/backend
     // once one exists.
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
+    // Optional - read directly from process.env by the OTLP exporter itself
+    // (see @platform/tracing) since it's not passed through explicitly.
+    OTEL_EXPORTER_OTLP_HEADERS: z.string().optional(),
+    // Required - passed to initTracing() as the service.name resource
+    // attribute (see @platform/tracing). Must match whatever service name
+    // is registered in the observability backend (e.g. Grafana Application
+    // Observability).
+    OTEL_SERVICE_NAME: z.string().min(1),
+    // Optional - passed to initTracing() as the deployment.environment
+    // resource attribute (see @platform/tracing).
+    OTEL_DEPLOYMENT_ENVIRONMENT: z.string().optional(),
+    // Optional - passed to initTracing() as the service.namespace resource
+    // attribute (see @platform/tracing).
+    OTEL_SERVICE_NAMESPACE: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

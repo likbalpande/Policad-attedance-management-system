@@ -9,8 +9,10 @@ import { env } from "./config/env.config";
 // TypeScript/bundlers, so server.ts is loaded via a genuinely deferred
 // dynamic import instead.
 initTracing({
-  service: "platform-backend",
-  otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    service: env.OTEL_SERVICE_NAME,
+    serviceNamespace: env.OTEL_SERVICE_NAMESPACE,
+    deploymentEnvironment: env.OTEL_DEPLOYMENT_ENVIRONMENT,
+    otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
 });
 
 void import("./server");
