@@ -1,0 +1,188 @@
+ADMIN FEATURES (FTSA + FTA) FIRST PASS - 2026-08-08
+
+OBJECTIVE:
+Turn the two placeholder dashboard stubs in platform/apps/frontend into real,
+navigable admin panels backed by live PB endpoints - org/admin/permissions-
+catalog management for FTSA (super-admin), batches management for FTA
+(admin, inside the shared app/staff/ tree).
+
+APPROACH:
+Plan-mode research (2 Explore agents in parallel: FT app structure, PB admin
+capabilities/DB schema) + direct reads of frontend-setup.txt, product-idea.txt,
+table-structure.txt and the architecture skill -> AskUserQuestion on 2 open
+decisions -> approved plan -> direct implementation. Two follow-up plan-mode
+passes in the same session (see below) after user feedback on the result.
+
+USER DECISIONS LOCKED IN BEFORE BUILDING (pass 1):
+1. Scope: both FTSA (super-admin) and FTA (admin, in app/staff/) in one pass.
+2. Build only what PB already supports today (organizations, admin users,
+   batches, the permissions catalog) - no placeholder nav for
+   courses/students/sessions/attendance, since PB has no modules for those yet.
+
+KNOWN GAP FLAGGED, DELIBERATELY OUT OF SCOPE:
+Granting a faculty a batch-scoped P_B permission (POST /api/v1/user-permissions)
+needs a groups-picker, but GET /super-admin/permission-config-groups is
+super-admin-only - ADMIN can't list groups to build that picker. Deferred
+until PB exposes a groups listing ADMIN can call.
+
+WHAT WAS BUILT (pass 1):
+- shadcn/ui primitives added via CLI (radix-nova style): table, dialog,
+  dropdown-menu, select, badge, alert-dialog, textarea, checkbox, switch.
+  No "form" component in this registry - forms use plain react-hook-form
+  register()/Controller, matching the existing login-flow pattern.
+- components/app-shell.tsx - sidebar-nav layout shared by both actor tiers
+  (nav items passed as a prop), replacing the old header-only
+  dashboard-layout.tsx. Deleted both stub dashboard pages.
+- routes/route-paths.ts + router.tsx expanded from two flat stub routes into
+  nested route trees per tier, each still gated by the existing
+  requireRole(...) loader, with an index redirect to the tier's first page.
+- FTSA: organizations (table + create dialog), admins (table + create dialog,
+  org Select), permissions (access-identifiers + permission-config-groups,
+  with an attach/detach dialog for group membership).
+- FTA: batches list (table + create dialog) + detail (edit form, archive
+  toggle, read-only access roster, delete gated to admin/super_admin via
+  AlertDialog confirmation).
+
+BUG FIXED DURING PASS 1: zod's `.default(false)` on a boolean schema field
+makes react-hook-form's `useForm<z.infer<...>>()` fail to compile (RHF's
+Resolver needs the schema's input/output types to match exactly, `.default()`
+breaks that). Fixed by dropping `.default()`, relying on RHF's own
+`defaultValues` instead.
+
+VERIFICATION (pass 1): typecheck/build/lint all green. Via /browse against
+the dev server (no PB/DB running): root -> /login redirect, and
+/super-admin, /staff, /staff/batches/1 all correctly bounce unauthenticated
+visitors to /login with zero console errors; design system renders
+correctly. NOT verified live against a real PB/DB this session (see Next
+Steps).
+
+---
+
+FOLLOW-UP 1: api/ FILE GRANULARITY (same session, user feedback)
+
+User flagged two things: (1) the shadcn-generated dialog.tsx/dropdown-menu.tsx/
+switch.tsx carried a leftover Next.js `"use client"` directive, meaningless in
+a plain Vite SPA - removed from all three. (2) `admins.api.ts` bundling
+create+list under a vague name violated frontend-setup.txt's own already-
+documented rule ("once a resource has >1 action it becomes a folder, one file
+per action"). Asked whether to also switch api/ to actor-based top folders
+(auth/super-admin/admin/user as the user first suggested) instead of the
+existing resource-based layout - user chose to keep resource-based, just fix
+the granularity.
+
+Restructured every multi-action resource (organizations, admins->users,
+access-identifiers, permission-config-groups, batches) from one flat
+`<resource>.api.ts`/`.queries.ts` pair into a folder with one `<action>.api.ts`/
+`.queries.ts` pair per action + a `<resource>.types.ts` for the shared entity
+type/query keys. Renamed `admins/` -> `users/` to match PB's own module name
+(`app/super-admin/users/`) instead of my invented "admins". Updated every
+consumer import across 4 feature areas. frontend-setup.txt's api/ example
+tree corrected to match (it had drifted from its own stated rule even before
+this session). Re-verified typecheck/build/lint clean.
+
+---
+
+FOLLOW-UP 2: SHARED FE<->BE API CONTRACTS (same session, user feedback)
+
+User asked whether request/response shapes were enforced as shared types
+between FT and PB. Answer: no - every FT type was hand-typed by reading PB's
+DTOs/row types at write time, no compiler link. Notable: `@platform/types`'s
+own `index.ts` already had a comment anticipating exactly this ("FT<->PB API
+shapes ... get added here as those features are built") but it had never
+actually been done, for this session's work or the prior session's
+staff-login types.
+
+Presented 3 options (A: full shared response+request types with PB return-
+type annotations; B: share only Zod request DTOs; C: process-rule-only, no
+restructuring). User rejected C, wants both A and B combined: Zod request
+DTOs shared and validated by PB / inferred by FT, AND shared response types
+so "whatever PB sends and whatever FT expects are provably the same type."
+Confirmed scope: retrofit the 5 resources already built this session, not
+just apply going forward.
+
+MECHANISM BUILT:
+- `@platform/types` gained a `zod` dependency and now holds, per resource
+  (mirroring PB's own module tree): the Zod request DTO + inferred type, and
+  a plain-TS response entity type. Barrel-exported from index.ts as before.
+- PB's `dto/*.dto.ts` files became one-line re-exports from `@platform/types`
+  (dto/ folder stays as the place to look, definition now centralized).
+  Route-param-only DTOs (batch-id, permission-config-group-id, remove-
+  access-identifier params) stay PB-local - no FE-constructed payload there.
+- Every response-producing PB service function's return type is now
+  explicitly annotated against the shared entity type (e.g.
+  `Promise<Organization>`). Real discovery mid-implementation: PB's DAL rows
+  have `Date` objects for timestamps, but the wire/shared type needs `string`
+  (what FT actually receives post-JSON) - so this literally would not
+  compile without also formatting dates. Added one `utils/serialize-<x>.ts`
+  per module (organizations, users/sanitize-user.ts already existed and got
+  adapted, access-identifiers, permission-config-groups, batches) that
+  converts Date->ISO-string, making the Promise<T> annotation actually true
+  rather than just structurally hopeful.
+- Also caught and fixed two latent (harmless but real) type inaccuracies
+  surfaced by this exercise: batches' create/update/delete responses don't
+  include the `access` roster (only list/get do, via resolveBatchAccess) -
+  previously typed as one `Batch` interface requiring `access` always; now
+  split into `Batch` (bare) and `BatchWithAccess extends Batch` (list/get) in
+  @platform/types. And FT's delete.api.ts was typed as returning `null`, but
+  PB's delete endpoint actually returns the deleted batch row - fixed to
+  `Batch`.
+- FT's RHF form schemas were deliberately kept FE-local (not replaced by the
+  shared Zod object) - PB's schema rejects `""` for an optional URL field,
+  which every create-dialog's empty-field UX already depends on tolerating.
+  The enforcement point is the submit handler's constructed payload, typed
+  against the shared DTO.
+- batches/access-identifiers/permission-config-groups' local AccessRosterUser/
+  FacultyAccessRosterUser/BatchAccess interfaces (previously duplicated
+  PB-side in batches.access-roster.service.ts and FT-side in
+  batches.types.ts) collapsed into the one shared @platform/types definition.
+
+BUG FOUND AND FIXED DURING VERIFICATION: `pnpm -r run typecheck` failed
+across every PB module touching a shared DTO - `@platform/types`'s zod
+resolved to a *different installed version* (3.25.76, pulled in because FT
+already depended on that range) than `@platform/http`/platform-backend's zod
+(3.23.8), so the actual Zod schema *values* crossing from `@platform/types`
+into PB's `validate()` middleware were structurally near-identical but
+nominally distinct classes - classic pnpm dual-instance issue. Fixed by
+pinning `@platform/types`'s zod dependency to the exact same version PB uses
+(`"3.23.8"`, not a caret range) and reinstalling; confirmed via `readlink -f`
+on each package's resolved `node_modules/zod` that PB/http/types now share
+one physical install while FT keeps its own newer zod (fine, since FT only
+ever imports the shared package's *type*, never the schema value).
+
+DOCS UPDATED (all 4 the user asked for, one per named location):
+- `.claude/skills/architecture/SKILL.md` - new "Shared FE<->BE contracts
+  (@platform/types)" section: full mechanism, the Date/string serialization
+  caveat, the BatchWithAccess-vs-Batch split as a worked example, the
+  route-param-DTO exception. `types` package-table row updated to point at it.
+- root `CLAUDE.md` - concise new rule bullet near "Architecture".
+- `frontend-setup.txt` - api/ section corrected again: `<resource>.types.ts`
+  now documented as holding only query keys (entity types moved out to
+  @platform/types), every resource's file-tree comment updated to match.
+- `platform-backend/backend-folder-structure-prompt.txt` - dto/ convention
+  section gained the PB-side mirror of the same rule.
+
+VERIFICATION: `pnpm -r run typecheck` (all 14 buildable workspace packages/
+apps) green after the zod-version fix; FT `build`/`lint` also green, same
+pre-existing warning set as before (no new ones).
+
+OUTPUT:
+- platform/apps/frontend/ - FTSA + FTA admin panels, api/ layer split
+  per-action, all built against shared @platform/types contracts.
+- platform/packages/types/ - now the real single source of truth for every
+  FT<->PB request/response shape built this session.
+- platform/apps/platform-backend/ - 5 modules' dto/ files + service return
+  types retrofitted to the shared contracts.
+- 4 doc files updated per the user's explicit ask.
+
+NEXT STEPS:
+- Live verification against a running PB + seeded DB still outstanding (no
+  PB/DB was running this session) - create org -> create admin -> create
+  access-identifier/permission-config-group -> attach/detach -> log in as
+  that admin -> create/edit/archive/delete a batch.
+- "Assign faculty to batch with P_B" UI remains blocked on PB exposing a
+  groups-listing endpoint ADMIN can call.
+- Courses/students/sessions/attendance admin UI remains fully unbuilt -
+  matches PB, which has no modules for these yet.
+- The next resource built (courses, once PB has it) is the first real test
+  of whether the shared-contracts discipline documented today actually
+  sticks without another reminder.

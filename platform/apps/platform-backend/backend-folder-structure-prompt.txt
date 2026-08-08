@@ -15,6 +15,20 @@ Make sure to follow these rules:
     the only package allowed to do that (shared with LALW, and LAG if it
     ever needs DB access).
 
+    Request DTOs and response entity types that FT also consumes are defined
+    once in @platform/types, never independently in this app - a module's
+    dto/<method>-<module-name>.dto.ts stays as the file to look in, but its
+    body is a one-line re-export (`export { fooDto, type FooDto } from
+    "@platform/types";`), and any response-producing service function's
+    return type is annotated against the matching @platform/types entity
+    (e.g. `Promise<Organization>`), formatting DB Date columns to ISO strings
+    on the way out (see e.g. organizations/utils/serialize-organization.ts)
+    so the annotation is literally true, not just structurally close. The one
+    exception: route-param-only DTOs (coercing a URL segment like `{ id:
+    number }`) stay local - there's no FE-constructed payload to share for
+    those. See the architecture skill's "Shared FE<->BE contracts" section
+    for the full rule and rationale.
+
 3. Inside the src folder, we will have
     these folders:
         app

@@ -1,7 +1,12 @@
 import { permissionConfigGroupsRepository, permittedAccessIdentifiersRepository } from "@platform/dal";
 import { NotFoundError } from "@platform/http";
+import type { PermittedAccessIdentifier } from "@platform/types";
+import { serializePermittedAccessIdentifier } from "../utils/serialize-permission-config-group";
 
-export async function removeAccessIdentifierFromGroup(groupId: number, accessIdentifierId: number) {
+export async function removeAccessIdentifierFromGroup(
+  groupId: number,
+  accessIdentifierId: number,
+): Promise<PermittedAccessIdentifier> {
   const group = await permissionConfigGroupsRepository.findPermissionConfigGroupById(groupId);
   if (!group) {
     throw new NotFoundError("Permission config group not found");
@@ -14,5 +19,5 @@ export async function removeAccessIdentifierFromGroup(groupId: number, accessIde
   if (!removed) {
     throw new NotFoundError("This access identifier is not permitted for this group");
   }
-  return removed;
+  return serializePermittedAccessIdentifier(removed);
 }

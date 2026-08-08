@@ -1,6 +1,10 @@
 import { permissionConfigGroupsRepository } from "@platform/dal";
-import type { ListPermissionConfigGroupsDto } from "../dto/list-permission-config-groups.dto";
+import type { ListPermissionConfigGroupsDto, PermissionConfigGroup } from "@platform/types";
+import { serializePermissionConfigGroup } from "../utils/serialize-permission-config-group";
 
-export async function listPermissionConfigGroups(input: ListPermissionConfigGroupsDto) {
-  return permissionConfigGroupsRepository.listPermissionConfigGroups(input.type);
+export async function listPermissionConfigGroups(
+  input: ListPermissionConfigGroupsDto,
+): Promise<PermissionConfigGroup[]> {
+  const groups = await permissionConfigGroupsRepository.listPermissionConfigGroups(input.type);
+  return groups.map(serializePermissionConfigGroup);
 }

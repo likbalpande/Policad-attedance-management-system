@@ -74,19 +74,72 @@ platform/apps/frontend/
       <resource>.api.ts         - raw axios call, one file per endpoint/action -
       <resource>.queries.ts       once a resource has >1 action it becomes a folder
                                    (mirrors PB's own controller/service split, e.g.
-                                   auth.staff-login.controller.ts, auth.refresh.
+                                   batches.create.controller.ts, batches.list.
                                    controller.ts, ... - one file per action, not one
-                                   file per resource)
+                                   file per resource). The action file itself is named
+                                   for the action only (create.api.ts, list.api.ts,
+                                   get.api.ts, ...), never repeating the resource name -
+                                   the folder already supplies that context, same as
+                                   auth/'s request-otp.api.ts not being named
+                                   auth-request-otp.api.ts. A resource folder with >1
+                                   action also gets one <resource>.types.ts - but this
+                                   ONLY holds FT-local concerns (TanStack Query key
+                                   constant(s)), never a request/response entity shape.
+                                   Every request DTO and response entity type PB already
+                                   defines is imported from @platform/types instead of
+                                   being redefined here - see the architecture skill's
+                                   "Shared FE<->BE contracts" section. A create.api.ts's
+                                   input type comes from @platform/types (e.g.
+                                   CreateOrganizationDto), never a hand-typed
+                                   CreateOrganizationInput.
       auth/
         request-otp.api.ts / request-otp.queries.ts
         staff-login.api.ts / staff-login.queries.ts
         refresh.api.ts             - no .queries.ts, only auth-refresh.ts's
                                       interceptor calls this, never a user mutation
       super-admin/
-        organizations.api.ts / organizations.queries.ts
-        users.api.ts / users.queries.ts
-        access-identifiers.api.ts / access-identifiers.queries.ts
-        permission-config-groups.api.ts / permission-config-groups.queries.ts
+        organizations/
+          organizations.types.ts   - organizationsQueryKey only (Organization,
+                                      CreateOrganizationDto live in @platform/types)
+          create.api.ts / create.queries.ts
+          list.api.ts / list.queries.ts
+        users/                     - matches PB's own app/super-admin/users/ module
+                                      (creates users with role=admin) - never call this
+                                      folder "admins", that's a made-up name PB doesn't
+                                      use and it's ambiguous with the ADMIN role itself
+          users.types.ts           - adminsQueryKey(orgId) only (AdminUser,
+                                      CreateAdminDto, ListAdminsDto in @platform/types)
+          create.api.ts / create.queries.ts
+          list.api.ts / list.queries.ts
+        access-identifiers/
+          access-identifiers.types.ts - accessIdentifiersQueryKey(params) only
+                                         (AccessIdentifier, CreateAccessIdentifierDto,
+                                         ListAccessIdentifiersDto in @platform/types)
+          create.api.ts / create.queries.ts
+          list.api.ts / list.queries.ts
+        permission-config-groups/
+          permission-config-groups.types.ts - permissionConfigGroupsQueryKey(params)
+                                               only (PermissionConfigGroup,
+                                               PermittedAccessIdentifier, and every
+                                               *Dto in @platform/types)
+          create.api.ts / create.queries.ts
+          list.api.ts / list.queries.ts
+          add-access-identifiers.api.ts / .queries.ts     (attach to a group)
+          remove-access-identifier.api.ts / .queries.ts   (detach from a group)
+      batches/                     - flat at api/ root, not nested under an actor -
+                                      matches PB's own standalone (non-actor-nested)
+                                      batches router; used by both FTA and FTF
+        batches.types.ts           - batchesQueryKey, batchQueryKey(id) only (Batch,
+                                      BatchWithAccess, BatchAccess,
+                                      AccessRosterUser/FacultyAccessRosterUser,
+                                      CreateBatchDto, UpdateBatchDto in @platform/types
+                                      - list/get return BatchWithAccess,
+                                      create/update/delete return the bare Batch)
+        create.api.ts / create.queries.ts
+        list.api.ts / list.queries.ts
+        get.api.ts / get.queries.ts
+        update.api.ts / update.queries.ts
+        delete.api.ts / delete.queries.ts
     components/
       ui/                    - shadcn/ui primitives
       <shared app components>  - layout, nav, QR display, etc.
@@ -144,6 +197,14 @@ cache state consistent through TanStack Query. Almost every `<resource>.api.ts` 
 `pbClient`; only the attendance-marking submit call (FTS scanning flow) calls
 `lagClient` - keep that one isolated in its own `api/attendance-marking.api.ts` rather
 than mixed into a PB-backed file.
+
+**Never hand-type a request/response shape PB already defines.** Every
+`<action>.api.ts`'s input and response type comes from `@platform/types`
+(same DTO PB validates with, same entity type PB's service returns) - a
+local `<resource>.types.ts` holds only TanStack Query key constants, nothing
+that mirrors a PB shape. See the architecture skill's "Shared FE<->BE
+contracts" section for the full rule, including why RHF form-validation
+schemas (`<feature>.schemas.ts`) are the one thing that *stays* FE-local.
 
 ## Config notes
 - tsconfig.json extends @platform/tsconfig/base.json, overrides module/moduleResolution

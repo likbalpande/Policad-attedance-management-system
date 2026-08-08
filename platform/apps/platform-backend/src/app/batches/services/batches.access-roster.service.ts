@@ -1,22 +1,7 @@
 import { usersRepository, userPermissionsRepository } from "@platform/dal";
 import { PERMISSION_SCOPE, USER_ROLE, type UserRole } from "@platform/permissions";
+import type { AccessRosterUser, BatchAccess } from "@platform/types";
 import { PERMISSIONS } from "../../../constants/permissions.constants";
-
-export interface AccessRosterUser {
-  id: number;
-  identifier: string;
-  alias: string | null;
-  role: UserRole;
-}
-
-export interface FacultyAccessRosterUser extends AccessRosterUser {
-  canEdit: boolean;
-}
-
-export interface BatchAccess {
-  admins: AccessRosterUser[];
-  faculties: FacultyAccessRosterUser[];
-}
 
 function toRosterUser(user: {
   id: number;

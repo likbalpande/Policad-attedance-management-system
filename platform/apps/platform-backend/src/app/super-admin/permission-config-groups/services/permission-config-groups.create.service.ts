@@ -1,10 +1,14 @@
 import { permissionConfigGroupsRepository, ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS } from "@platform/dal";
 import { assertNoUniqueViolation } from "@platform/http";
-import type { CreatePermissionConfigGroupDto } from "../dto/create-permission-config-group.dto";
+import type { CreatePermissionConfigGroupDto, PermissionConfigGroup } from "@platform/types";
+import { serializePermissionConfigGroup } from "../utils/serialize-permission-config-group";
 
-export async function createPermissionConfigGroup(input: CreatePermissionConfigGroupDto) {
+export async function createPermissionConfigGroup(
+  input: CreatePermissionConfigGroupDto,
+): Promise<PermissionConfigGroup> {
   try {
-    return await permissionConfigGroupsRepository.createPermissionConfigGroup(input);
+    const group = await permissionConfigGroupsRepository.createPermissionConfigGroup(input);
+    return serializePermissionConfigGroup(group);
   } catch (err) {
     assertNoUniqueViolation(err, ADMIN_PERMISSIONS_CONFIG_GROUPS_CONSTRAINTS);
     throw err;

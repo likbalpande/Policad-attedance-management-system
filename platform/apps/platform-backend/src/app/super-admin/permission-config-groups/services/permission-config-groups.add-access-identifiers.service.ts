@@ -5,12 +5,16 @@ import {
   ADMIN_PERMITTED_ACCESS_IDENTIFIERS_CONSTRAINTS,
 } from "@platform/dal";
 import { assertNoUniqueViolation, BadRequestError, NotFoundError } from "@platform/http";
-import type { AddAccessIdentifiersDto } from "../dto/add-access-identifiers.dto";
+import type { AddAccessIdentifiersDto, PermittedAccessIdentifier } from "@platform/types";
+import { serializePermittedAccessIdentifier } from "../utils/serialize-permission-config-group";
 
 // Validates at the application level (not just leaning on the DB's
 // composite FKs) so a mismatch/missing id surfaces as a clean 400/404
 // instead of a raw FK-violation error - see the plan's note on this.
-export async function addAccessIdentifiersToGroup(groupId: number, input: AddAccessIdentifiersDto) {
+export async function addAccessIdentifiersToGroup(
+  groupId: number,
+  input: AddAccessIdentifiersDto,
+): Promise<PermittedAccessIdentifier[]> {
   const group = await permissionConfigGroupsRepository.findPermissionConfigGroupById(groupId);
   if (!group) {
     throw new NotFoundError("Permission config group not found");
@@ -35,11 +39,12 @@ export async function addAccessIdentifiersToGroup(groupId: number, input: AddAcc
   }
 
   try {
-    return await permittedAccessIdentifiersRepository.addAccessIdentifiersToGroup(
+    const permitted = await permittedAccessIdentifiersRepository.addAccessIdentifiersToGroup(
       groupId,
       group.type,
       input.accessIdentifierIds,
     );
+    return permitted.map(serializePermittedAccessIdentifier);
   } catch (err) {
     assertNoUniqueViolation(err, ADMIN_PERMITTED_ACCESS_IDENTIFIERS_CONSTRAINTS);
     throw err;

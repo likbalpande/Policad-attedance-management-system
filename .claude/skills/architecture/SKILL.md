@@ -95,13 +95,88 @@ ignoring `tsc`'s output settings entirely).
 | `dal` | Repository functions, organized by resource (e.g. `users.repository.ts`, `attendance.repository.ts`). **The only package allowed to import `db` and run queries.** | PB, LALW, and LAG if it ever needs DB access. |
 | `http` | `ApiSuccessResponse`/`ApiErrorResponse`, error classes, `asyncHandler`, Zod validation middleware, generic error-handling middleware, `getUniqueViolationConstraint` + `assertNoUniqueViolation` (map a caught Postgres unique-violation error to the violated constraint name / throw `ConflictError` for it - see "Unique-constraint-name constants" below). | PB, LAG, LALW's local health-check shell. |
 | `logger` | Winston logger instance factory (`createLogger({ service })`). No tracing dependency/code - trace-log correlation happens via auto-instrumentation instead, see "Distributed tracing" below. | All apps, via a thin per-app wrapper. |
-| `types` | Cross-service contracts: PB<->LAG, LAG<->LALW SQS payload shape, LALW<->PB webhook payload, FT<->PB API shapes. | All apps. |
+| `types` | Cross-service contracts: PB<->LAG, LAG<->LALW SQS payload shape, LALW<->PB webhook payload, FT<->PB API shapes (request DTOs + response entity types - see "Shared FE<->BE contracts" below). | All apps. |
 | `permissions` | RBAC-specific vocabulary only: `PERMISSION_SCOPE` (general/batch/course/org, i.e. `P_O`/`P_B`/`P_C`) and `USER_ROLE` (super_admin/admin/faculty/student). | PB (RBAC checks), FT (conditional UI), `db` (column typing). |
 | `enums` | Non-permission `application_level_enum` vocabularies from table-structure.txt: `COURSE_TYPE`, `ATTENDANCE_STATUS`, `ATTENDANCE_REMARK`, `WEBHOOK_STATUS`. Kept separate from `permissions` so that package stays RBAC-only. | `db` (column typing), and any app/service that writes/reads these columns (PB, LALW). |
 | `uai` | UAI-generation logic (ua-parser-js based: `browser.name + os.name + device.vendor + device.model + device.type + cpu.architecture`). **Must produce identical output on FT (client) and PB/LAG (server verification)** - any drift silently breaks login. | FT, PB, LAG. |
 | `crypto` | Asymmetric sign/verify helpers. PB signs, LAG verifies - sharing the implementation keeps algorithm/padding choices in sync. | PB, LAG. |
 | `tracing` | OpenTelemetry bootstrap (`initTracing`), manual span helper (`withSpan`), trace-context propagation helpers for the future SQS boundary. See "Distributed tracing" below. | `dal` (manual DB spans), every app's dedicated entrypoint. Not `logger` - that package has no tracing dependency at all. |
 | `tsconfig`, `eslint-config` | Shared compiler/lint config. | All apps. |
+
+### Shared FE<->BE contracts (`@platform/types`)
+
+Every FT<->PB endpoint's request DTO and response entity type is defined
+**once**, in `@platform/types`, mirroring PB's own module tree (e.g.
+`super-admin/organizations/create-organization.dto.ts`,
+`super-admin/organizations/organization.ts`, `batches/create-batch.dto.ts`,
+`batches/batch.ts`). Barrel-exported from the package's `index.ts` same as
+every other export there. This was a deliberate call, not an accident of
+history - `@platform/types`'s own `index.ts` already anticipated it ("FT<->PB
+API shapes ... get added here as those features are built") before it was
+actually done for the first time.
+
+**Request side (real, compiler+runtime enforced)**: the Zod schema itself
+lives in `@platform/types` (not just its inferred type). PB's
+`dto/<method>-<module-name>.dto.ts` file becomes a one-line re-export -
+`export { fooDto, type FooDto } from "@platform/types";` - so `validate(dto)`
+still runs the real schema at request time, and the module's own dto/ folder
+stays the place to look for what it accepts. FT's `<action>.api.ts` imports
+the same inferred type (`import type { FooDto } from "@platform/types"`) as
+its function's parameter type - never a hand-typed parallel interface.
+
+RHF form-validation schemas (FT's `<feature>.schemas.ts`) are the one
+deliberate exception - they stay FE-local, not the shared Zod object. HTML
+inputs need looser ergonomics the wire schema doesn't allow (e.g.
+`.optional().or(z.literal(""))` so an empty field submits `""` instead of
+`undefined` - PB's schema would reject that for an optional URL field). The
+bridge is the submit handler's constructed payload, which must satisfy the
+shared DTO type - TypeScript catches a missing/mistyped field there, even
+though the RHF resolver itself uses a looser local schema.
+
+**Response side (compiler-enforced, one known gap)**: the response entity
+type (e.g. `Organization`, `Batch`) is a plain TS interface, not Zod - PB
+doesn't validate its own outgoing data. Every response-producing service
+function's return type is explicitly annotated against it (e.g.
+`listOrganizations(): Promise<Organization[]>`), which is the actual
+enforcement point - a real shape mismatch fails PB's own `tsc`, not just
+FT's. Since PB's DAL rows have `Date` objects for timestamp columns but the
+shared type's wire shape uses `string` (that's what's actually on the wire
+after JSON serialization, and what FT genuinely receives), every module gets
+a small `utils/serialize-<resource>.ts` that formats `Date` -> ISO string
+before returning - see `organizations/utils/serialize-organization.ts` or
+`batches/utils/serialize-batch.ts` for the pattern. Without this the
+`Promise<Organization>` annotation wouldn't even compile (`Date` isn't
+assignable to `string`). Each serializer's parameter is typed against the
+real `@platform/dal` row type (`OrganizationRow`, `BatchRow`, ...), never a
+hand-copied inline field list - a typed variable (not an object literal)
+passed to a narrower parameter type isn't excess-property-checked, so an
+inline duplicate shape gives zero protection against a DB column being
+removed/renamed; matching the real row type does. `@platform/dal`'s
+`index.ts` re-exports every table's row type at the top level for exactly
+this - add one there (mirroring the existing `UserRow`/`BatchRow`/... entries)
+whenever a new module needs a serializer. **Known gap, not solved**: TS
+structural typing won't flag an *added* DB column that isn't added to the
+shared type too - only field removals/renames break the build. This is a
+deliberate boundary, not an oversight: the shared response type in
+`@platform/types` itself must NOT import from `@platform/dal` to close this
+gap, even though that would technically work - `@platform/dal` is documented
+as PB/LALW/LAG-only (FT is explicitly not a consumer), and `@platform/types`
+is consumed by every app including FT, so pulling `@platform/dal` (and
+transitively `@platform/db`'s Postgres-driver territory) into it would leak
+a backend-only dependency graph into FT's typecheck. Worth knowing the gap
+exists, not worth closing it by breaking that layering.
+
+**A response shape can differ from its request DTO's shape and from other
+actions on the same resource** - e.g. batches' `create`/`update`/`delete`
+return the bare `Batch`, while `list`/`get` return `BatchWithAccess` (`Batch`
++ an `access` roster) - model that as two distinct exported types
+(`batch-access.ts`'s `BatchWithAccess extends Batch`), not one type with an
+optional field callers might forget to check.
+
+**The one exception**: route-param-only DTOs (coercing a URL segment, e.g.
+`{ id: number }` from `batchIdParamsDto`) stay PB-local. There's no
+FE-constructed JSON payload to share there - FT already knows it's passing a
+number in the URL.
 
 ### Application-level enum columns
 
@@ -645,6 +720,19 @@ login), worth knowing before extending FT further:
   Fix: `main.tsx` awaits rehydration and only *then* dynamically imports `App`
   (and therefore `routes/router.tsx`), so the store is already correct before
   the router - and its loaders - are created at all.
+
+**Actor-tier layout: one shared `AppShell`, not per-tier layouts.** Once an
+actor tier grows past a single stub page (first happened building out FTSA's
+organizations/admins/permissions and FTA's batches), its top-level route
+becomes a parent route rendering a small `<XShell>` component
+(`components/app-shell.tsx`'s `AppShell`, given a `title` and a `navItems`
+array) that wraps `<Outlet/>` in a left-sidebar-nav layout - children are the
+actual feature pages, and the parent still carries the existing
+`requireRole(...)` loader (unchanged). Both actor tiers share the one
+`AppShell` component rather than forking a layout per tier; only the
+`navItems` passed in differ. The parent route also gets an `index: true`
+child that `redirect()`s to that tier's first real page (e.g. `/super-admin`
+-> `/super-admin/organizations`), replacing the old flat stub-page pattern.
 
 ## Cross-cutting conventions (all HTTP-serving apps)
 

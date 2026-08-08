@@ -13,6 +13,13 @@ canonical, up-to-date reference for monorepo tooling, shared packages, the
 DB-access rule (only @platform/dal may query the DB), and per-app folder
 structure. Keep it updated whenever an architecture decision changes.
 
+# Shared FE/BE API Contracts
+Request DTOs (Zod) and response entity types for every FT<->PB endpoint are
+defined once in `@platform/types` and imported by both sides - never
+hand-type a matching interface independently in `platform-backend` or
+`frontend`. See the architecture skill's "Shared FE<->BE contracts" section
+for the full mechanism.
+
 # Analyze Before Coding
 For every user query, suggestion, or implementation request: first analyze the
 request and the current relevant code, then present the best possible

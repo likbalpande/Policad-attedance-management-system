@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@platform/permissions": "workspace:*"
+    "@platform/permissions": "workspace:*",
+    "zod": "3.23.8"
   },
   "devDependencies": {
     "@platform/tsconfig": "workspace:*",

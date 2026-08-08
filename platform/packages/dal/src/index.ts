@@ -10,8 +10,10 @@ export * as batchesRepository from "./repositories/batches.repository";
 // usersRepository.UserRow) since app-layer code needs them for its own
 // derived types (e.g. PB's SafeUser = Omit<UserRow, "password" | ...>).
 export type { UserRow } from "./repositories/users.repository";
+export type { OrganizationRow } from "./repositories/organizations.repository";
 export type { AccessIdentifierRow } from "./repositories/access-identifiers.repository";
 export type { PermissionConfigGroupRow } from "./repositories/permission-config-groups.repository";
+export type { PermittedAccessIdentifierRow } from "./repositories/permitted-access-identifiers.repository";
 export type { UserPermissionRow } from "./repositories/user-permissions.repository";
 export type { BatchRow } from "./repositories/batches.repository";
 // Constraint constants - single source of truth lives in @platform/db's

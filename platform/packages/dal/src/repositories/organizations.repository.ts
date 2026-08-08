@@ -3,7 +3,7 @@ import { organizations, type DbClient } from "@platform/db";
 import { withSpan } from "@platform/tracing";
 import { getDb } from "../client";
 
-type OrganizationRow = typeof organizations.$inferSelect;
+export type OrganizationRow = typeof organizations.$inferSelect;
 type NewOrganizationInput = typeof organizations.$inferInsert;
 
 // Soft-deleted rows are excluded by default everywhere in this repository -
